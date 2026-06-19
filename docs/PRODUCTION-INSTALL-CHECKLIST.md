@@ -106,12 +106,12 @@ output. Reopen blocker #4 with the production reproduction.
 Open the dashboard in a browser:
 
 ```
-/$COMPANY_HANDLE/tokens
+/$COMPANY_HANDLE/oai-tokens
 ```
 
 - [ ] The page renders without console errors
-- [ ] The billing-config strip shows period, currency, margin, subscription
-- [ ] All 6 KPI cards render (totals, input, output, list, net, price)
+- [ ] The billing-config strip shows period, currency, margin
+- [ ] All 5 KPI cards render (total tokens, input, output, cost, price)
 - [ ] The per-agent card lists at least one agent (after a few minutes of
       activity)
 
@@ -121,10 +121,9 @@ Open the settings page:
 /$COMPANY_HANDLE/company/settings/instance/plugins/<INSTALL_UUID>
 ```
 
-- [ ] All eight per-model rate inputs are editable
+- [ ] All per-model rate inputs are editable
 - [ ] Save persists; reloading the page shows the saved values
-- [ ] Subscription preset dropdown shows Off / Pro / Max
-- [ ] The "Open usage dashboard →" link navigates back to `/tokens`
+- [ ] The "Open usage dashboard →" link navigates back to `/oai-tokens`
 
 ## 7. Monthly CSV export
 
@@ -134,8 +133,7 @@ curl -O "https://<your-host>/api/plugins/openai-token-cost-reports/api/export/mo
 
 - [ ] HTTP 200
 - [ ] CSV columns: `period,month_start,month_end,model,input_tokens,output_tokens,total_tokens,currency,price`
-- [ ] `price` matches the dashboard's Sub-adjusted total for the same window
-      (or the List total when subscription is Off)
+- [ ] `price` matches the dashboard's Price total for the same window
 - [ ] Filename includes the company slug and currency code
 
 ## 8. Final state on the TODO doc
