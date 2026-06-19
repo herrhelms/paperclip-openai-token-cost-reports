@@ -13,25 +13,21 @@ import type {
 // Format: `<family>-<major>-<minor>[-1m]`. The `-1m` suffix marks the 1M-token-context variant.
 // "unknown" is the catch-all for anything normalizeModel can't classify.
 export type ModelKey =
-  | "opus-4-8"
-  | "opus-4-8-1m"
-  | "opus-4-7"
-  | "opus-4-7-1m"
-  | "sonnet-4-6"
-  | "sonnet-4-6-1m"
-  | "sonnet-4-5"
-  | "sonnet-4-5-1m"
+  | "gpt-5-5"
+  | "gpt-5-5-pro"
+  | "gpt-5-4"
+  | "gpt-5-4-mini"
+  | "gpt-5-4-nano"
+  | "gpt-5-3-codex"
   | "unknown";
 
 export const PRICED_MODEL_KEYS: ReadonlyArray<Exclude<ModelKey, "unknown">> = [
-  "opus-4-8",
-  "opus-4-8-1m",
-  "opus-4-7",
-  "opus-4-7-1m",
-  "sonnet-4-6",
-  "sonnet-4-6-1m",
-  "sonnet-4-5",
-  "sonnet-4-5-1m",
+  "gpt-5-5",
+  "gpt-5-5-pro",
+  "gpt-5-4",
+  "gpt-5-4-mini",
+  "gpt-5-4-nano",
+  "gpt-5-3-codex",
 ];
 
 type PricingRates = Record<Exclude<ModelKey, "unknown">, { input: number; output: number }>;
@@ -84,32 +80,20 @@ interface DailyRow {
   output_tokens: number;
 }
 
-// Defaults pulled from https://platform.claude.com/docs/en/about-claude/pricing#model-pricing.
-// Per the "Long context pricing" section: Opus 4.8 / 4.7 / Sonnet 4.6 INCLUDE the 1M context window
-// at standard pricing — no surcharge for >200k requests. We mirror those rates for the [1m] variants.
-// Sonnet 4.5 is not listed as 1M-included on the current page; its [1m] default mirrors the base
-// rate so the line item exists if the operator's data uses it. Operator can override either.
+// NEW — rates from developers.openai.com/api/docs/pricing, fetched 2026-06-19
 const DEFAULT_PRICING: PricingConfig = {
   pricing: {
-    "opus-4-8":      { input: 5, output: 25 },
-    "opus-4-8-1m":   { input: 5, output: 25 },
-    "opus-4-7":      { input: 5, output: 25 },
-    "opus-4-7-1m":   { input: 5, output: 25 },
-    "sonnet-4-6":    { input: 3, output: 15 },
-    "sonnet-4-6-1m": { input: 3, output: 15 },
-    "sonnet-4-5":    { input: 3, output: 15 },
-    "sonnet-4-5-1m": { input: 3, output: 15 },
+    "gpt-5-5":       { input: 5.00,  output: 30.00 },
+    "gpt-5-5-pro":   { input: 30.00, output: 180.00 },
+    "gpt-5-4":       { input: 2.50,  output: 15.00 },
+    "gpt-5-4-mini":  { input: 0.75,  output: 4.50 },
+    "gpt-5-4-nano":  { input: 0.20,  output: 1.25 },
+    "gpt-5-3-codex": { input: 1.75,  output: 14.00 },
   },
   margin: { percent: 0 },
-  subscription: { preset: "off", divisor: 1 },
 };
 
-const LEGACY_MODEL_REMAP: Record<string, ModelKey> = {
-  // Pre-0.2.0 stored values used coarse family-only buckets. Map to the most recent listed
-  // variant so historical rows can still be priced after upgrade.
-  opus: "opus-4-7",
-  sonnet: "sonnet-4-6",
-};
+const LEGACY_MODEL_REMAP: Record<string, ModelKey> = {};
 
 export function normalizeModel(raw: unknown): ModelKey {
   if (typeof raw !== "string") return "unknown";
@@ -117,19 +101,17 @@ export function normalizeModel(raw: unknown): ModelKey {
   const remap = LEGACY_MODEL_REMAP[s];
   if (remap) return remap;
   if (s in DEFAULT_PRICING.pricing) return s as ModelKey;
-  // Long-context marker: explicit [1m] in name OR contains "1m"/"-1m-" alongside the version.
-  const hasLongContext = /\[1m\]|(-|_| )1m(\b|-)/.test(s);
-  const familyMatch = s.match(/(opus|sonnet)/);
-  if (!familyMatch) return "unknown";
-  const family = familyMatch[1];
-  const versionMatch = s.match(/(\d+)[._-]?(\d+)/);
-  if (!versionMatch) return "unknown";
-  const major = versionMatch[1];
-  const minor = versionMatch[2];
-  const candidateBase = `${family}-${major}-${minor}` as ModelKey;
-  const candidate1m = `${candidateBase}-1m` as ModelKey;
-  if (hasLongContext && candidate1m in DEFAULT_PRICING.pricing) return candidate1m;
-  if (candidateBase in DEFAULT_PRICING.pricing) return candidateBase;
+  // Exact codex check first — its slug doesn't fit the version-suffix pattern.
+  if (/^gpt-5[._-]?3[._-]codex/.test(s)) return "gpt-5-3-codex";
+  // Then look for gpt-5.X with optional suffix.
+  const m = s.match(/^gpt-5[._-]?(\d)(?:[._-](pro|mini|nano))?/);
+  if (!m) return "unknown";
+  const minor = m[1];
+  const variant = m[2];
+  const candidate = variant
+    ? (`gpt-5-${minor}-${variant}` as ModelKey)
+    : (`gpt-5-${minor}` as ModelKey);
+  if (candidate in DEFAULT_PRICING.pricing) return candidate;
   return "unknown";
 }
 

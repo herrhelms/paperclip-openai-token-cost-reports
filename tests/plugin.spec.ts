@@ -30,14 +30,14 @@ describe("manifest", () => {
     expect(manifest.id).toMatch(/openai-token-cost-reports/);
   });
 
-  it("declares the page slot with routePath 'tokens'", () => {
+  it("declares the page slot with routePath 'oai-tokens'", () => {
     const slots = (manifest.ui?.slots ?? []) as Array<{
       type: string;
       routePath?: string;
     }>;
     const page = slots.find((s) => s.type === "page");
     expect(page).toBeTruthy();
-    expect(page?.routePath).toBe("tokens");
+    expect(page?.routePath).toBe("oai-tokens");
   });
 
   it("declares a settingsPage slot without routePath", () => {
@@ -109,26 +109,31 @@ describe("normalizeModel", () => {
     }
   });
 
-  it("remaps legacy bare-family keys to the most recent variant", () => {
-    expect(normalizeModel("opus")).toBe("opus-4-7");
-    expect(normalizeModel("sonnet")).toBe("sonnet-4-6");
+  it("recognizes flagship GPT-5.5 with dotted minor version", () => {
+    expect(normalizeModel("gpt-5.5")).toBe("gpt-5-5");
+    expect(normalizeModel("gpt-5.5-pro")).toBe("gpt-5-5-pro");
   });
 
-  it("derives version from common dot/dash/underscore-separated families", () => {
-    expect(normalizeModel("claude-opus-4-8-20260101")).toBe("opus-4-8");
-    expect(normalizeModel("Claude.Sonnet.4.6")).toBe("sonnet-4-6");
-    expect(normalizeModel("opus_4_7")).toBe("opus-4-7");
+  it("recognizes GPT-5.4 family with size suffixes", () => {
+    expect(normalizeModel("gpt-5.4")).toBe("gpt-5-4");
+    expect(normalizeModel("gpt-5.4-mini")).toBe("gpt-5-4-mini");
+    expect(normalizeModel("gpt-5.4-nano")).toBe("gpt-5-4-nano");
   });
 
-  it("detects the [1m] long-context marker", () => {
-    expect(normalizeModel("claude-opus-4-8[1m]")).toBe("opus-4-8-1m");
-    expect(normalizeModel("Opus 4.8 1m")).toBe("opus-4-8-1m");
-    expect(normalizeModel("sonnet-4-6-1m")).toBe("sonnet-4-6-1m");
+  it("recognizes the GPT-5.3 codex specialty model", () => {
+    expect(normalizeModel("gpt-5.3-codex")).toBe("gpt-5-3-codex");
+    expect(normalizeModel("gpt-5_3_codex")).toBe("gpt-5-3-codex");
   });
 
-  it("falls back to 'unknown' for models with no recognizable family", () => {
-    expect(normalizeModel("haiku-4-0")).toBe("unknown");
-    expect(normalizeModel("claude-instant")).toBe("unknown");
+  it("accepts versioned snapshot ids", () => {
+    expect(normalizeModel("gpt-5.5-2026-01-15")).toBe("gpt-5-5");
+    expect(normalizeModel("gpt-5.4-mini-2025-12-08")).toBe("gpt-5-4-mini");
+  });
+
+  it("returns 'unknown' for unrelated families", () => {
+    expect(normalizeModel("claude-opus-4-7")).toBe("unknown");
+    expect(normalizeModel("gemini-2.0-pro")).toBe("unknown");
+    expect(normalizeModel("gpt-4o")).toBe("unknown");
   });
 });
 
