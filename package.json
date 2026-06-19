@@ -1,0 +1,70 @@
+{
+  "name": "claude-token-cost-reports",
+  "version": "1.0.0-rc.3",
+  "description": "Track Claude token usage per Paperclip company, store daily rollups, render a dashboard, and export a monthly CSV for token-based billing. Pricing table covers Opus 4.8 / 4.7 and Sonnet 4.6 / 4.5 with 1M-context variants.",
+  "author": "@herrhelms",
+  "homepage": "https://github.com/herrhelms/paperclip-claude-token-cost-reports#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/herrhelms/paperclip-claude-token-cost-reports.git"
+  },
+  "bugs": {
+    "url": "https://github.com/herrhelms/paperclip-claude-token-cost-reports/issues"
+  },
+  "type": "module",
+  "main": "dist/worker.js",
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "migrations",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "paperclipPlugin": {
+    "manifest": "dist/manifest.js",
+    "worker": "dist/worker.js",
+    "ui": "dist/ui",
+    "migrationsDir": "migrations"
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "dev": "node esbuild.config.mjs --watch",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
+    "test": "vitest run",
+    "lint": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@paperclipai/plugin-sdk": "^2026.609.0"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@paperclipai/plugin-sdk": "^2026.609.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/node": "^22.9.0",
+    "esbuild": "^0.24.0",
+    "rollup": "^4.24.0",
+    "@rollup/plugin-node-resolve": "^15.3.0",
+    "@rollup/plugin-commonjs": "^28.0.1",
+    "@rollup/plugin-typescript": "^12.1.1",
+    "tslib": "^2.8.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "paperclip",
+    "paperclip-plugin",
+    "tokens",
+    "usage",
+    "billing",
+    "claude"
+  ],
+  "license": "MIT"
+}

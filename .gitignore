@@ -1,0 +1,8 @@
+node_modules
+dist
+.paperclip-sdk
+*.log
+.DS_Store
+
+# Local agent / IDE state (per-developer; never published).
+.claude/
