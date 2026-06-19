@@ -3,7 +3,7 @@ import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 const manifest: PaperclipPluginManifestV1 = {
   id: "openai-token-cost-reports",
   apiVersion: 1,
-  version: "1.0.0-rc.3",
+  version: "1.0.0-rc.1",
   displayName: "OpenAI Token Usage",
   description:
     "Track OpenAI API token usage per company, accumulate daily totals, and export a monthly CSV priced at configurable per-model rates (GPT-5.5 / GPT-5.4 family, GPT-5.3 Codex). The dashboard is mounted at the host's company-scoped plugin page (open from the company sidebar) and per-company pricing is configured here in the plugin settings.",
