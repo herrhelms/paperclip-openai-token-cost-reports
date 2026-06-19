@@ -32,44 +32,9 @@ export const PRICED_MODEL_KEYS: ReadonlyArray<Exclude<ModelKey, "unknown">> = [
 
 type PricingRates = Record<Exclude<ModelKey, "unknown">, { input: number; output: number }>;
 
-// Subscription presets reflect Anthropic's published subscription plans.
-// The divisor is the "value multiplier" — Claude Pro absorbs ~5x the list-price
-// cost of equivalent API usage; Claude Max ~20x. Divisor is applied before
-// margin so the chargeback rate reflects subscription savings.
-//
-// When mode === "off", divisor MUST be 1 (no-op). The discriminated value
-// keeps presets explicit so the UI can render labels without re-deriving.
-export type SubscriptionPreset = "off" | "pro" | "max";
-
-export const SUBSCRIPTION_DIVISORS: Record<SubscriptionPreset, number> = {
-  off: 1,
-  pro: 5,
-  max: 20,
-};
-
-export const SUBSCRIPTION_LABELS: Record<SubscriptionPreset, string> = {
-  off: "Off (full list price)",
-  pro: "Claude Pro (÷5)",
-  max: "Claude Max (÷20)",
-};
-
 export interface PricingConfig {
   pricing: PricingRates;
   margin: { percent: number };
-  // Optional for backward compat with persisted pre-0.7.0 configs.
-  // Loaders normalize missing/legacy shapes to { preset: "off", divisor: 1 }.
-  subscription?: {
-    preset: SubscriptionPreset;
-    divisor: number;
-  };
-}
-
-export function subscriptionDivisor(cfg: PricingConfig | null | undefined): number {
-  const sub = cfg?.subscription;
-  if (!sub) return 1;
-  if (sub.preset === "off") return 1;
-  if (!isFinite(sub.divisor) || sub.divisor <= 0) return 1;
-  return sub.divisor;
 }
 
 interface DailyRow {
@@ -159,17 +124,6 @@ export function isPricingConfig(v: unknown): v is PricingConfig {
   }
   const margin = c.margin as Record<string, unknown> | undefined;
   if (!margin || typeof margin.percent !== "number") return false;
-  // Subscription is optional. If present it must be well-formed; otherwise
-  // it's treated as "off" downstream. Don't fail the type guard on its absence.
-  const sub = c.subscription as { preset?: unknown; divisor?: unknown } | undefined;
-  if (sub !== undefined && sub !== null) {
-    const valid =
-      typeof sub.divisor === "number" &&
-      sub.divisor > 0 &&
-      typeof sub.preset === "string" &&
-      (sub.preset === "off" || sub.preset === "pro" || sub.preset === "max");
-    if (!valid) return false;
-  }
   return true;
 }
 
@@ -186,43 +140,8 @@ export function upgradePricingConfig(raw: unknown): PricingConfig {
       out.pricing[k] = { input: row.input, output: row.output };
     }
   }
-  // Legacy mappings: a pre-0.2.0 config had flat opus/sonnet/haiku keys.
-  // Copy those forward to their remapped variants only if the operator hasn't already
-  // overridden the new key, so we don't clobber explicit upgrades.
-  const legacyOpus = (p.opus ?? {}) as { input?: unknown; output?: unknown };
-  if (typeof legacyOpus.input === "number" && typeof legacyOpus.output === "number") {
-    if (out.pricing["opus-4-7"].input === DEFAULT_PRICING.pricing["opus-4-7"].input) {
-      out.pricing["opus-4-7"] = { input: legacyOpus.input, output: legacyOpus.output };
-    }
-  }
-  const legacySonnet = (p.sonnet ?? {}) as { input?: unknown; output?: unknown };
-  if (typeof legacySonnet.input === "number" && typeof legacySonnet.output === "number") {
-    if (out.pricing["sonnet-4-6"].input === DEFAULT_PRICING.pricing["sonnet-4-6"].input) {
-      out.pricing["sonnet-4-6"] = { input: legacySonnet.input, output: legacySonnet.output };
-    }
-  }
   const m = c.margin as { percent?: unknown } | undefined;
   if (m && typeof m.percent === "number") out.margin.percent = m.percent;
-  // Carry forward subscription if present and valid.
-  const sub = c.subscription as { preset?: unknown; divisor?: unknown } | undefined;
-  if (sub && typeof sub === "object") {
-    const presetRaw = sub.preset;
-    const divisorRaw = sub.divisor;
-    if (
-      (presetRaw === "off" || presetRaw === "pro" || presetRaw === "max") &&
-      typeof divisorRaw === "number" &&
-      divisorRaw > 0
-    ) {
-      out.subscription = { preset: presetRaw, divisor: divisorRaw };
-    } else if (presetRaw === "off" || presetRaw === "pro" || presetRaw === "max") {
-      // Preset valid but divisor missing/garbage → recover from the canonical
-      // map so the operator sees a coherent state instead of "off".
-      out.subscription = {
-        preset: presetRaw,
-        divisor: SUBSCRIPTION_DIVISORS[presetRaw],
-      };
-    }
-  }
   return out;
 }
 
@@ -829,11 +748,11 @@ const CSV_MODEL_LABELS: Record<string, string> = {
 
 // Client-facing CSV: one row per (calendar-month, model) showing tokens and
 // the price the client owes — in the operator's chosen billing currency, with
-// margin applied. Doesn't surface the operator's underlying USD cost, the
-// subscription divisor, or any other internal billing artifact. Each month's
-// price is converted at the FX rate stored for that month's end day, so a
-// year-spanning export uses each month's own contemporary rate rather than a
-// single point-in-time snapshot.
+// margin applied. Doesn't surface the operator's underlying USD cost or any
+// other internal billing artifact. Each month's price is converted at the
+// FX rate stored for that month's end day, so a year-spanning export uses
+// each month's own contemporary rate rather than a single point-in-time
+// snapshot.
 async function buildClientMonthlyCsv(
   ctx: PluginContext,
   companyId: string,
@@ -842,7 +761,6 @@ async function buildClientMonthlyCsv(
 ): Promise<{ csv: string; currency: CurrencyCode }> {
   const pricing = await loadPricing(ctx, companyId);
   const currencyCfg = await loadCurrency(ctx, companyId);
-  const divisor = subscriptionDivisor(pricing);
   const margin = pricing ? (pricing.margin.percent || 0) / 100 : 0;
   const daily = await readDaily(ctx, companyId, from, to);
 
@@ -882,10 +800,7 @@ async function buildClientMonthlyCsv(
     bucket.output_tokens += out;
     if (pricing) {
       const { inputCost, outputCost } = priceFor(row.model, inp, out, pricing);
-      // Apply subscription divisor at the per-row level so the underlying
-      // cost reflects what the operator actually pays. Margin and FX go on
-      // top in the row materialization below.
-      bucket.cost_usd += (inputCost + outputCost) / divisor;
+      bucket.cost_usd += inputCost + outputCost;
     }
   }
 
@@ -1470,7 +1385,6 @@ const plugin = definePlugin({
       const fx = await getFxRate(ctx, to, currencyCfg.currency);
       const fxRate = fx?.rate ?? 1;
       const margin = pricing ? (pricing.margin.percent || 0) / 100 : 0;
-      const divisor = subscriptionDivisor(pricing);
       const rows = await readDaily(ctx, companyId, from, to);
 
       const byDay = new Map<string, {
@@ -1510,10 +1424,8 @@ const plugin = definePlugin({
           .sort((a, b) => b.day.localeCompare(a.day))
           .map((r) => {
             const cost_usd = pricing ? r.cost_usd : null;
-            const subAdjusted_usd =
-              cost_usd === null ? null : cost_usd / divisor;
             const price_usd =
-              subAdjusted_usd === null ? null : subAdjusted_usd * (1 + margin);
+              cost_usd === null ? null : cost_usd * (1 + margin);
             const cost_native =
               cost_usd === null ? null : cost_usd * fxRate;
             const price_native =
@@ -1567,7 +1479,6 @@ const plugin = definePlugin({
       const fx = await getFxRate(ctx, to, currencyCfg.currency);
       const fxRate = fx?.rate ?? 1;
       const margin = pricing ? (pricing.margin.percent || 0) / 100 : 0;
-      const divisor = subscriptionDivisor(pricing);
       const daily = await readDaily(ctx, companyId, from, to);
 
       const byModel = new Map<
@@ -1598,10 +1509,8 @@ const plugin = definePlugin({
       const rows = Array.from(byModel.entries())
         .map(([model, b]) => {
           const cost_usd = pricing ? b.cost_usd : null;
-          const subAdjusted_usd =
-            cost_usd === null ? null : cost_usd / divisor;
           const price_usd =
-            subAdjusted_usd === null ? null : subAdjusted_usd * (1 + margin);
+            cost_usd === null ? null : cost_usd * (1 + margin);
           const cost_native = cost_usd === null ? null : cost_usd * fxRate;
           const price_native =
             price_usd === null ? null : price_usd * fxRate;
@@ -1824,12 +1733,6 @@ const plugin = definePlugin({
 
       const margin = pricing ? (pricing.margin.percent || 0) / 100 : 0;
       const fxRate = fx?.rate ?? 1;
-      // Subscription divisor: applied to cost BEFORE margin so the chargeback
-      // rate (price_*) reflects the subscription savings. cost_usd / cost_native
-      // stay at raw list-price so the UI can show both "List" + "Sub-adjusted"
-      // columns when the operator enables a subscription preset.
-      const divisor = subscriptionDivisor(pricing);
-      const subEnabled = divisor !== 1;
 
       type ModelLine = {
         model: ModelKey;
@@ -1866,12 +1769,9 @@ const plugin = definePlugin({
           ? priceFor(r.model, inp, out, pricing)
           : { inputCost: 0, outputCost: 0 };
         // cost_usd / cost_native = raw list-price equivalent in USD / display currency.
-        // price_usd / price_native = chargeback after (a) subscription divisor
-        // and (b) margin. When divisor=1 this is identical to the old behaviour.
+        // price_usd / price_native = chargeback after margin.
         const cost_usd = pricing ? inputCost + outputCost : null;
-        const subAdjusted_usd = cost_usd === null ? null : cost_usd / divisor;
-        const price_usd =
-          subAdjusted_usd === null ? null : subAdjusted_usd * (1 + margin);
+        const price_usd = cost_usd === null ? null : cost_usd * (1 + margin);
         const cost_native = cost_usd === null ? null : cost_usd * fxRate;
         const price_native = price_usd === null ? null : price_usd * fxRate;
 
@@ -1971,11 +1871,6 @@ const plugin = definePlugin({
         fxDay: fx?.day ?? null,
         fxSource: fx?.source ?? null,
         marginPercent: pricing?.margin.percent ?? 0,
-        subscription: {
-          enabled: subEnabled,
-          preset: pricing?.subscription?.preset ?? "off",
-          divisor,
-        },
         rows: result,
       };
     });

@@ -6,18 +6,15 @@ import {
   PRICED_MODEL_KEYS,
   priceFor,
   slugifyForFilename,
-  subscriptionDivisor,
-  SUBSCRIPTION_DIVISORS,
   upgradePricingConfig,
   type ModelKey,
   type PricingConfig,
 } from "../src/worker";
 
 // These tests cover the pure functions that carry the load-bearing math and
-// shape decisions: pricing, normalization, model recognition, slug rules, and
-// the subscription divisor. End-to-end behavior is verified via the worker
-// bridge from the host CLI in CI; this file targets logic that doesn't
-// require a worker harness.
+// shape decisions: pricing, normalization, model recognition, and slug rules.
+// End-to-end behavior is verified via the worker bridge from the host CLI in
+// CI; this file targets logic that doesn't require a worker harness.
 
 // ---- Manifest sanity ------------------------------------------------------
 
@@ -141,17 +138,14 @@ describe("normalizeModel", () => {
 
 const FULL_PRICING: PricingConfig = {
   pricing: {
-    "opus-4-8": { input: 5, output: 25 },
-    "opus-4-8-1m": { input: 5, output: 25 },
-    "opus-4-7": { input: 5, output: 25 },
-    "opus-4-7-1m": { input: 5, output: 25 },
-    "sonnet-4-6": { input: 3, output: 15 },
-    "sonnet-4-6-1m": { input: 3, output: 15 },
-    "sonnet-4-5": { input: 3, output: 15 },
-    "sonnet-4-5-1m": { input: 3, output: 15 },
+    "gpt-5-5":       { input: 5, output: 30 },
+    "gpt-5-5-pro":   { input: 30, output: 180 },
+    "gpt-5-4":       { input: 2.5, output: 15 },
+    "gpt-5-4-mini":  { input: 0.75, output: 4.5 },
+    "gpt-5-4-nano":  { input: 0.2,  output: 1.25 },
+    "gpt-5-3-codex": { input: 1.75, output: 14 },
   },
   margin: { percent: 0 },
-  subscription: { preset: "off", divisor: 1 },
 };
 
 describe("priceFor", () => {
@@ -162,54 +156,17 @@ describe("priceFor", () => {
   });
 
   it("computes cost as tokens / 1M × rate", () => {
-    const { inputCost, outputCost } = priceFor("opus-4-8", 2_000_000, 1_000_000, FULL_PRICING);
+    const { inputCost, outputCost } = priceFor("gpt-5-5", 2_000_000, 1_000_000, FULL_PRICING);
     expect(inputCost).toBeCloseTo(10, 8); // 2M × $5 = $10
-    expect(outputCost).toBeCloseTo(25, 8); // 1M × $25 = $25
+    expect(outputCost).toBeCloseTo(30, 8); // 1M × $30 = $30
   });
 
   it("returns zero when a model is missing from the rate table", () => {
     const sparse = { ...FULL_PRICING, pricing: { ...FULL_PRICING.pricing } } as PricingConfig;
-    delete (sparse.pricing as Record<string, unknown>)["opus-4-8"];
-    const { inputCost, outputCost } = priceFor("opus-4-8", 1_000_000, 1_000_000, sparse);
+    delete (sparse.pricing as Record<string, unknown>)["gpt-5-5"];
+    const { inputCost, outputCost } = priceFor("gpt-5-5", 1_000_000, 1_000_000, sparse);
     expect(inputCost).toBe(0);
     expect(outputCost).toBe(0);
-  });
-});
-
-describe("subscriptionDivisor", () => {
-  it("defaults to 1 when pricing or subscription is absent", () => {
-    expect(subscriptionDivisor(null)).toBe(1);
-    expect(subscriptionDivisor(undefined)).toBe(1);
-    expect(subscriptionDivisor({ ...FULL_PRICING, subscription: undefined })).toBe(1);
-  });
-
-  it("returns 1 for 'off' even if divisor is set non-1", () => {
-    const cfg: PricingConfig = {
-      ...FULL_PRICING,
-      subscription: { preset: "off", divisor: 99 },
-    };
-    expect(subscriptionDivisor(cfg)).toBe(1);
-  });
-
-  it("returns the per-preset divisor for pro and max", () => {
-    const pro: PricingConfig = {
-      ...FULL_PRICING,
-      subscription: { preset: "pro", divisor: SUBSCRIPTION_DIVISORS.pro },
-    };
-    const max: PricingConfig = {
-      ...FULL_PRICING,
-      subscription: { preset: "max", divisor: SUBSCRIPTION_DIVISORS.max },
-    };
-    expect(subscriptionDivisor(pro)).toBe(5);
-    expect(subscriptionDivisor(max)).toBe(20);
-  });
-
-  it("falls back to 1 when divisor is non-finite or non-positive", () => {
-    const broken: PricingConfig = {
-      ...FULL_PRICING,
-      subscription: { preset: "max", divisor: -1 },
-    };
-    expect(subscriptionDivisor(broken)).toBe(1);
   });
 });
 
@@ -219,7 +176,7 @@ describe("isPricingConfig", () => {
   });
 
   it("rejects partial pricing tables", () => {
-    const partial = { ...FULL_PRICING, pricing: { "opus-4-8": { input: 5, output: 25 } } };
+    const partial = { ...FULL_PRICING, pricing: { "gpt-5-5": { input: 5, output: 30 } } };
     expect(isPricingConfig(partial)).toBe(false);
   });
 
@@ -228,46 +185,23 @@ describe("isPricingConfig", () => {
     delete noMargin.margin;
     expect(isPricingConfig(noMargin)).toBe(false);
   });
-
-  it("tolerates missing subscription (legacy pre-0.7.0 configs)", () => {
-    const noSub = { ...FULL_PRICING } as PricingConfig;
-    delete noSub.subscription;
-    expect(isPricingConfig(noSub)).toBe(true);
-  });
 });
 
 describe("upgradePricingConfig", () => {
   it("returns a copy of DEFAULT_PRICING for arbitrary garbage", () => {
     const out = upgradePricingConfig({ random: "garbage" });
-    expect(out.pricing["opus-4-8"]).toEqual({ input: 5, output: 25 });
-    expect(out.margin).toEqual({ percent: 0 });
+    expect(out.pricing["gpt-5-5"]).toBeDefined();
+    expect(out.margin.percent).toBe(0);
   });
 
-  it("carries forward legacy bare opus/sonnet keys to the most recent variant", () => {
-    const legacy = {
-      pricing: {
-        opus: { input: 8, output: 40 },
-        sonnet: { input: 4, output: 20 },
-      },
-      margin: { percent: 12 },
-    };
-    const out = upgradePricingConfig(legacy);
-    expect(out.pricing["opus-4-7"]).toEqual({ input: 8, output: 40 });
-    expect(out.pricing["sonnet-4-6"]).toEqual({ input: 4, output: 20 });
-    expect(out.margin.percent).toBe(12);
-  });
-
-  it("does not clobber explicitly-set new keys with legacy ones", () => {
-    const mixed = {
-      pricing: {
-        opus: { input: 99, output: 99 },
-        "opus-4-7": { input: 7, output: 35 },
-      },
-      margin: { percent: 0 },
-    };
-    const out = upgradePricingConfig(mixed);
-    // opus-4-7 was explicitly set, so the legacy `opus` mapping is ignored.
-    expect(out.pricing["opus-4-7"]).toEqual({ input: 7, output: 35 });
+  it("ignores a legacy subscription field on input configs", () => {
+    const upgraded = upgradePricingConfig({
+      pricing: FULL_PRICING.pricing,
+      margin: { percent: 10 },
+      subscription: { preset: "max", divisor: 20 },
+    });
+    expect(upgraded.margin.percent).toBe(10);
+    expect((upgraded as unknown as Record<string, unknown>).subscription).toBeUndefined();
   });
 });
 
