@@ -4,9 +4,9 @@ const manifest: PaperclipPluginManifestV1 = {
   id: "openai-token-cost-reports",
   apiVersion: 1,
   version: "1.0.0-rc.3",
-  displayName: "Claude Token Usage",
+  displayName: "OpenAI Token Usage",
   description:
-    "Track Claude token usage per company, accumulate daily totals, and export a monthly CSV priced at configurable per-model rates (Opus 4.8 / 4.7, Sonnet 4.6 / 4.5, plus 1M context variants). The dashboard is mounted at the host's company-scoped plugin page (open from the company sidebar) and per-company pricing is configured here in the plugin settings.",
+    "Track OpenAI API token usage per company, accumulate daily totals, and export a monthly CSV priced at configurable per-model rates (GPT-5.5 / GPT-5.4 family, GPT-5.3 Codex). The dashboard is mounted at the host's company-scoped plugin page (open from the company sidebar) and per-company pricing is configured here in the plugin settings.",
   author: "@herrhelms",
   categories: ["automation"],
   capabilities: [
@@ -91,8 +91,9 @@ const manifest: PaperclipPluginManifestV1 = {
         // numbers, hyphens; no slashes. The host mounts this at the company-scoped
         // path it owns; we don't get to insert intermediate path segments.
         // "tokens" reads cleaner than "usage" since the host's prefix already
-        // contains the plugin key: /$COMPANY/plugins/openai-token-cost-reports/tokens.
-        routePath: "tokens",
+        // contains the plugin key: /$COMPANY/oai-tokens. "oai-" is the conventional
+        // short prefix for "openai-" in URL slugs.
+        routePath: "oai-tokens",
       },
       {
         type: "settingsPage",
