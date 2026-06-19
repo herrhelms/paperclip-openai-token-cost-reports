@@ -1,14 +1,14 @@
--- claude-token-cost-reports — initial schema.
+-- openai-token-cost-reports — initial schema.
 -- The host runs this in the plugin's private namespace
--- `plugin_claude_token_cost_reports_c7ca204bbe`
--- (derived from `plugin_<slug>_<sha256(id)[0:10]>` for id `claude-token-cost-reports`).
+-- `plugin_openai_token_cost_reports_5d9ad52d0e`
+-- (derived from `plugin_<slug>_<sha256(id)[0:10]>` for id `openai-token-cost-reports`).
 -- All object refs must be fully qualified with that schema name.
 --
 -- Idempotent: each CREATE uses IF NOT EXISTS so the migration is safe to re-run
 -- on a fresh install where the namespace registry was purged but the postgres
 -- schema was left intact (purge --force on uninstall doesn't always DROP).
 
-CREATE TABLE IF NOT EXISTS plugin_claude_token_cost_reports_c7ca204bbe.usage_events (
+CREATE TABLE IF NOT EXISTS plugin_openai_token_cost_reports_5d9ad52d0e.usage_events (
   source_event_id TEXT PRIMARY KEY,
   company_id      TEXT NOT NULL,
   agent_id        TEXT,
@@ -20,12 +20,12 @@ CREATE TABLE IF NOT EXISTS plugin_claude_token_cost_reports_c7ca204bbe.usage_eve
 );
 
 CREATE INDEX IF NOT EXISTS usage_events_company_day_idx
-  ON plugin_claude_token_cost_reports_c7ca204bbe.usage_events (company_id, day);
+  ON plugin_openai_token_cost_reports_5d9ad52d0e.usage_events (company_id, day);
 
 CREATE INDEX IF NOT EXISTS usage_events_day_idx
-  ON plugin_claude_token_cost_reports_c7ca204bbe.usage_events (day);
+  ON plugin_openai_token_cost_reports_5d9ad52d0e.usage_events (day);
 
-CREATE TABLE IF NOT EXISTS plugin_claude_token_cost_reports_c7ca204bbe.usage_daily (
+CREATE TABLE IF NOT EXISTS plugin_openai_token_cost_reports_5d9ad52d0e.usage_daily (
   company_id     TEXT NOT NULL,
   day            TEXT NOT NULL,
   model          TEXT NOT NULL,
@@ -35,9 +35,9 @@ CREATE TABLE IF NOT EXISTS plugin_claude_token_cost_reports_c7ca204bbe.usage_dai
 );
 
 CREATE INDEX IF NOT EXISTS usage_daily_company_idx
-  ON plugin_claude_token_cost_reports_c7ca204bbe.usage_daily (company_id, day);
+  ON plugin_openai_token_cost_reports_5d9ad52d0e.usage_daily (company_id, day);
 
-CREATE TABLE IF NOT EXISTS plugin_claude_token_cost_reports_c7ca204bbe.pricing_config (
+CREATE TABLE IF NOT EXISTS plugin_openai_token_cost_reports_5d9ad52d0e.pricing_config (
   company_id TEXT PRIMARY KEY,
   json       TEXT NOT NULL
 );

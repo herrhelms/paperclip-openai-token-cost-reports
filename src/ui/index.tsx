@@ -20,7 +20,7 @@ import {
 // the canonical page URL is /$COMPANY_HANDLE/tokens. linkProps() takes a
 // company-relative path (leading slash, no company prefix) and the host
 // resolves the prefix at render time.
-const PLUGIN_KEY = "claude-token-cost-reports";
+const PLUGIN_KEY = "openai-token-cost-reports";
 const USAGE_ROUTE_SLUG = "tokens";
 // Host router (confirmed against the installed bundle):
 //   path:"company/settings/instance/plugins/:pluginId"
@@ -1588,7 +1588,7 @@ export function UsagePage(): JSX.Element {
   const downloadCsv = useCallback(async () => {
     if (downloading || !companyId) return;
     setDownloading(true);
-    const url = `/api/plugins/claude-token-cost-reports/api/export/monthly.csv?companyId=${encodeURIComponent(
+    const url = `/api/plugins/openai-token-cost-reports/api/export/monthly.csv?companyId=${encodeURIComponent(
       companyId,
     )}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
     // Filename mirrors the worker's Content-Disposition: company slug,

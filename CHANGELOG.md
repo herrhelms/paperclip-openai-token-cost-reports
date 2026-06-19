@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.0-rc.1] - 2026-06-16
 ### Changed
-- BREAKING: renamed `claude-token-usage` → `claude-token-cost-reports` (npm package, in-app slug, DB namespace). Existing installs must `paperclipai plugin uninstall claude-token-usage --force` before installing.
+- BREAKING: renamed `claude-token-usage` → `openai-token-cost-reports` (npm package, in-app slug, DB namespace). Existing installs must `paperclipai plugin uninstall claude-token-usage --force` before installing.
 - Migrations made idempotent so re-installs don't fail on lingering postgres schemas.
 - Migration prefix collision resolved (`002_fx_rates.sql` → `003_fx_rates.sql`).
 - Package now publishable: `private: false`, `license: MIT`, SDK pinned to a version range, LICENSE file added.

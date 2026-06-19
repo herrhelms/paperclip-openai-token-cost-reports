@@ -1382,7 +1382,7 @@ let capturedCtx: PluginContext | null = null;
 const plugin = definePlugin({
   async setup(ctx: PluginContext) {
     capturedCtx = ctx;
-    ctx.logger.info("claude-token-cost-reports starting up", {
+    ctx.logger.info("openai-token-cost-reports starting up", {
       namespace: ctx.db.namespace,
     });
 

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Take `claude-token-cost-reports` from v0.9.2 to a publishable `1.0.0-rc.1` by closing every blocker and 🟡 item in `docs/TODO-BEFORE-DEPLOYMENT.md`, verifying along the way, and tagging a release candidate ready for `npm publish --dry-run`.
+**Goal:** Take `openai-token-cost-reports` from v0.9.2 to a publishable `1.0.0-rc.1` by closing every blocker and 🟡 item in `docs/TODO-BEFORE-DEPLOYMENT.md`, verifying along the way, and tagging a release candidate ready for `npm publish --dry-run`.
 
 **Architecture:** Sequential tasks ordered by dependency (LICENSE file must exist before referencing MIT in package.json; package.json + LICENSE land before any version bump or publish dry-run). Each task is independently committable — frequent commits after green local checks. The execution path runs `pnpm typecheck && pnpm test && pnpm build` after every code-affecting change, and `paperclipai plugin uninstall && install -l .` after every manifest/migration change.
 
@@ -12,9 +12,9 @@
 
 ## Pre-flight (already done — do not redo)
 
-- ✅ Plugin renamed `claude-token-usage` → `claude-token-cost-reports` (slug, npm name, DB namespace, folder, briefs, cognito knowledge)
+- ✅ Plugin renamed `claude-token-usage` → `openai-token-cost-reports` (slug, npm name, DB namespace, folder, briefs, cognito knowledge)
 - ✅ Migrations idempotent (`CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`)
-- ✅ Install verified at v0.9.2 with new namespace `plugin_claude_token_cost_reports_c7ca204bbe`
+- ✅ Install verified at v0.9.2 with new namespace `plugin_openai_token_cost_reports_5d9ad52d0e`
 - ✅ Backfill + per-agent breakdown confirmed working end-to-end
 
 Reference docs to keep open while executing:
@@ -168,26 +168,26 @@ git mv migrations/002_fx_rates.sql migrations/003_fx_rates.sql
 The file body doesn't reference its own filename, so no content edit needed. Confirm by:
 
 Run: `head -3 migrations/003_fx_rates.sql`
-Expected output: the same header (`claude-token-cost-reports — daily FX rates ...`), no "002" embedded in comments.
+Expected output: the same header (`openai-token-cost-reports — daily FX rates ...`), no "002" embedded in comments.
 
 - [ ] **Step 3: Reinstall to verify ordering**
 
 Run:
 
 ```bash
-paperclipai plugin uninstall claude-token-cost-reports --force
+paperclipai plugin uninstall openai-token-cost-reports --force
 paperclipai plugin install -l .
 paperclipai plugin list
 ```
 
-Expected output: `key=claude-token-cost-reports status=ready version=0.9.2 id=<uuid>`.
+Expected output: `key=openai-token-cost-reports status=ready version=0.9.2 id=<uuid>`.
 
 - [ ] **Step 4: Sanity-check FX table works after rename**
 
 Run:
 
 ```bash
-paperclipai plugin bridge:data claude-token-cost-reports \
+paperclipai plugin bridge:data openai-token-cost-reports \
   --payload-json '{"key":"getFxStatus","params":{"companyId":"<COMPANY_ID>"}}' --json
 ```
 
@@ -474,10 +474,10 @@ git commit -m "docs: seed CHANGELOG.md (Keep a Changelog format)"
 Run the same call twice in quick succession:
 
 ```bash
-paperclipai plugin bridge:data claude-token-cost-reports \
+paperclipai plugin bridge:data openai-token-cost-reports \
   --payload-json '{"key":"getPricing","params":{"companyId":"<COMPANY_ID>"}}' --json
 sleep 1
-paperclipai plugin bridge:data claude-token-cost-reports \
+paperclipai plugin bridge:data openai-token-cost-reports \
   --payload-json '{"key":"getPricing","params":{"companyId":"<COMPANY_ID>"}}' --json
 ```
 
@@ -567,7 +567,7 @@ with:
 
 ## [1.0.0-rc.1] - 2026-06-16
 ### Changed
-- BREAKING: renamed `claude-token-usage` → `claude-token-cost-reports` (npm package, in-app slug, DB namespace). Existing installs must `paperclipai plugin uninstall claude-token-usage --force` before installing.
+- BREAKING: renamed `claude-token-usage` → `openai-token-cost-reports` (npm package, in-app slug, DB namespace). Existing installs must `paperclipai plugin uninstall claude-token-usage --force` before installing.
 - Migrations made idempotent so re-installs don't fail on lingering postgres schemas.
 - Migration prefix collision resolved (`002_fx_rates.sql` → `003_fx_rates.sql`).
 - Package now publishable: `private: false`, `license: MIT`, SDK pinned to a version range, LICENSE file added.
@@ -586,12 +586,12 @@ Expected: typecheck clean, 33 tests pass, dist built. `dist/manifest.js` contain
 - [ ] **Step 6: Reinstall live**
 
 ```bash
-paperclipai plugin uninstall claude-token-cost-reports --force
+paperclipai plugin uninstall openai-token-cost-reports --force
 paperclipai plugin install -l .
 paperclipai plugin list
 ```
 
-Expected: `key=claude-token-cost-reports status=ready version=1.0.0-rc.1 id=<uuid>`.
+Expected: `key=openai-token-cost-reports status=ready version=1.0.0-rc.1 id=<uuid>`.
 
 - [ ] **Step 7: Commit**
 

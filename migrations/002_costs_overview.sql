@@ -2,7 +2,7 @@
 -- can mirror the host /costs page (rolling windows, subscription split,
 -- per-model breakdown). Idempotent: each ALTER is gated on column absence.
 
-ALTER TABLE plugin_claude_token_cost_reports_c7ca204bbe.usage_events
+ALTER TABLE plugin_openai_token_cost_reports_5d9ad52d0e.usage_events
   ADD COLUMN IF NOT EXISTS raw_model           TEXT,
   ADD COLUMN IF NOT EXISTS provider            TEXT,
   ADD COLUMN IF NOT EXISTS source              TEXT,
@@ -11,20 +11,20 @@ ALTER TABLE plugin_claude_token_cost_reports_c7ca204bbe.usage_events
 
 -- Backfill raw_model from the normalized model for legacy rows so the
 -- per-model breakdown groups them consistently with new rows.
-UPDATE plugin_claude_token_cost_reports_c7ca204bbe.usage_events
+UPDATE plugin_openai_token_cost_reports_5d9ad52d0e.usage_events
    SET raw_model = model
  WHERE raw_model IS NULL;
 
 -- Default provider for legacy rows. Anthropic is the only provider this plugin
 -- handles today; later providers can be added without backfilling further.
-UPDATE plugin_claude_token_cost_reports_c7ca204bbe.usage_events
+UPDATE plugin_openai_token_cost_reports_5d9ad52d0e.usage_events
    SET provider = 'anthropic'
  WHERE provider IS NULL;
 
 -- Index for time-window queries (rolling 5h / 24h / 7d aggregates).
 CREATE INDEX IF NOT EXISTS usage_events_company_occurred_at_idx
-  ON plugin_claude_token_cost_reports_c7ca204bbe.usage_events (company_id, occurred_at DESC);
+  ON plugin_openai_token_cost_reports_5d9ad52d0e.usage_events (company_id, occurred_at DESC);
 
 -- Index for per-(raw_model, source) grouping.
 CREATE INDEX IF NOT EXISTS usage_events_company_raw_model_idx
-  ON plugin_claude_token_cost_reports_c7ca204bbe.usage_events (company_id, raw_model);
+  ON plugin_openai_token_cost_reports_5d9ad52d0e.usage_events (company_id, raw_model);

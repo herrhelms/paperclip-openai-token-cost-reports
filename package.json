@@ -1,15 +1,15 @@
 {
-  "name": "claude-token-cost-reports",
+  "name": "openai-token-cost-reports",
   "version": "1.0.0-rc.3",
   "description": "Track Claude token usage per Paperclip company, store daily rollups, render a dashboard, and export a monthly CSV for token-based billing. Pricing table covers Opus 4.8 / 4.7 and Sonnet 4.6 / 4.5 with 1M-context variants.",
   "author": "@herrhelms",
-  "homepage": "https://github.com/herrhelms/paperclip-claude-token-cost-reports#readme",
+  "homepage": "https://github.com/herrhelms/paperclip-openai-token-cost-reports#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/herrhelms/paperclip-claude-token-cost-reports.git"
+    "url": "git+https://github.com/herrhelms/paperclip-openai-token-cost-reports.git"
   },
   "bugs": {
-    "url": "https://github.com/herrhelms/paperclip-claude-token-cost-reports/issues"
+    "url": "https://github.com/herrhelms/paperclip-openai-token-cost-reports/issues"
   },
   "type": "module",
   "main": "dist/worker.js",

@@ -1,6 +1,6 @@
 # TODO before deployment
 
-Self-audit of `claude-token-cost-reports` at v0.9.2. Items below are ranked by severity
+Self-audit of `openai-token-cost-reports` at v0.9.2. Items below are ranked by severity
 and grouped so the blocker fixes can be done in one ~30 min pass before tagging
 a release.
 
@@ -76,9 +76,9 @@ fresh installs (which will be the common case post-publish).
 Verify post-rename:
 
 ```bash
-paperclipai plugin uninstall claude-token-cost-reports --force
+paperclipai plugin uninstall openai-token-cost-reports --force
 paperclipai plugin install -l .
-paperclipai plugin inspect claude-token-cost-reports --json | jq '.migrations'
+paperclipai plugin inspect openai-token-cost-reports --json | jq '.migrations'
 ```
 
 Expect three entries: `001_init`, `002_costs_overview`, `003_fx_rates`.
@@ -264,10 +264,10 @@ desirable but not blocking; forks have the procedure.
 Every migration begins with:
 
 ```sql
-ALTER TABLE plugin_claude_token_cost_reports_c7ca204bbe.usage_events ...
+ALTER TABLE plugin_openai_token_cost_reports_5d9ad52d0e.usage_events ...
 ```
 
-The hash `1a4b97362d` is derived from `sha256("claude-token-cost-reports")[0:10]`. If
+The hash `1a4b97362d` is derived from `sha256("openai-token-cost-reports")[0:10]`. If
 the plugin slug ever changes (npm scope prefix, slug rename), every migration
 file silently breaks.
 
@@ -300,16 +300,16 @@ surface. If the host scopes or removes that endpoint, the settings link breaks.
 
 ### ~~13. Package name vs in-app slug split~~ — RESOLVED 2026-06-16
 
-Post-rename, the npm package name (`claude-token-cost-reports`), the in-app slug
-(`claude-token-cost-reports`), and the namespace seed (same string, hashed) are
+Post-rename, the npm package name (`openai-token-cost-reports`), the in-app slug
+(`openai-token-cost-reports`), and the namespace seed (same string, hashed) are
 all the same identifier. README "Naming" section documents the alignment.
 
 ---
 
 ### Original analysis
 
-`claude-token-cost-reports` (npm) vs `claude-token-cost-reports` (in-app key).
-Acceptable, but `npm install claude-token-cost-reports` doesn't match
+`openai-token-cost-reports` (npm) vs `openai-token-cost-reports` (in-app key).
+Acceptable, but `npm install openai-token-cost-reports` doesn't match
 the in-Paperclip key, which is confusing for new operators.
 
 **Mitigation**
@@ -362,7 +362,7 @@ Do these six in one pass, then tag `v1.0.0-rc.1`:
 Then:
 
 ```bash
-pnpm build && pnpm test && paperclipai plugin uninstall claude-token-cost-reports \
+pnpm build && pnpm test && paperclipai plugin uninstall openai-token-cost-reports \
   && paperclipai plugin install -l . \
   && paperclipai plugin list   # confirm 1.0.0-rc.1 status=ready
 npm publish --dry-run          # confirm tarball contents look right

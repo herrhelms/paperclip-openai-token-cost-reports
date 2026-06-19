@@ -14,7 +14,7 @@ If every box checks green, mark blocker #4 in
 ## 1. Install
 
 ```bash
-paperclipai plugin install claude-token-cost-reports@1.0.0-rc.1
+paperclipai plugin install openai-token-cost-reports@1.0.0-rc.1
 paperclipai plugin list
 ```
 
@@ -22,13 +22,13 @@ paperclipai plugin list
 - [ ] `version=1.0.0-rc.1`
 - [ ] An install UUID is printed (capture it: `<INSTALL_UUID>`)
 
-If `status` is `error`, run `paperclipai plugin logs claude-token-cost-reports`
+If `status` is `error`, run `paperclipai plugin logs openai-token-cost-reports`
 and capture the failure before continuing.
 
 ## 2. Migrations applied
 
 ```bash
-paperclipai plugin inspect claude-token-cost-reports --json | jq '.migrations'
+paperclipai plugin inspect openai-token-cost-reports --json | jq '.migrations'
 ```
 
 - [ ] Three rows: `001_init`, `002_costs_overview`, `003_fx_rates`
@@ -43,7 +43,7 @@ the postgres error before escalating.
 ## 3. Capability grants
 
 ```bash
-paperclipai plugin inspect claude-token-cost-reports --json | jq '.capabilities'
+paperclipai plugin inspect openai-token-cost-reports --json | jq '.capabilities'
 ```
 
 - [ ] `costs.read` is granted (this gates `cost_event.created` delivery — if
@@ -60,7 +60,7 @@ worker actually saw a `cost_event.created` event:
 
 ```bash
 COMPANY_ID="<one-of-your-company-uuids>"
-paperclipai plugin bridge:data claude-token-cost-reports \
+paperclipai plugin bridge:data openai-token-cost-reports \
   --payload-json "{\"key\":\"getIngestStats\",\"params\":{\"companyId\":\"$COMPANY_ID\"}}" --json
 ```
 
@@ -81,16 +81,16 @@ some hosts produced a `state.get: invocation scope` 502 on the SECOND
 ```bash
 COMPANY_ID="<your-company-uuid>"
 
-paperclipai plugin bridge:data claude-token-cost-reports \
+paperclipai plugin bridge:data openai-token-cost-reports \
   --payload-json "{\"key\":\"getPricing\",\"params\":{\"companyId\":\"$COMPANY_ID\"}}" --json
 sleep 1
-paperclipai plugin bridge:data claude-token-cost-reports \
+paperclipai plugin bridge:data openai-token-cost-reports \
   --payload-json "{\"key\":\"getPricing\",\"params\":{\"companyId\":\"$COMPANY_ID\"}}" --json
 
-paperclipai plugin bridge:data claude-token-cost-reports \
+paperclipai plugin bridge:data openai-token-cost-reports \
   --payload-json "{\"key\":\"getFxStatus\",\"params\":{\"companyId\":\"$COMPANY_ID\"}}" --json
 sleep 1
-paperclipai plugin bridge:data claude-token-cost-reports \
+paperclipai plugin bridge:data openai-token-cost-reports \
   --payload-json "{\"key\":\"getFxStatus\",\"params\":{\"companyId\":\"$COMPANY_ID\"}}" --json
 ```
 
@@ -98,7 +98,7 @@ paperclipai plugin bridge:data claude-token-cost-reports \
 - [ ] None return `API error 502 ... state.get ... invocation scope`
 
 If any call returns the scope error, capture the full output, the install
-UUID, and the host's `paperclipai plugin logs claude-token-cost-reports`
+UUID, and the host's `paperclipai plugin logs openai-token-cost-reports`
 output. Reopen blocker #4 with the production reproduction.
 
 ## 6. UI smoke test
@@ -129,7 +129,7 @@ Open the settings page:
 ## 7. Monthly CSV export
 
 ```bash
-curl -O "https://<your-host>/api/plugins/claude-token-cost-reports/api/export/monthly.csv?companyId=$COMPANY_ID&from=2026-06-01&to=2026-06-30"
+curl -O "https://<your-host>/api/plugins/openai-token-cost-reports/api/export/monthly.csv?companyId=$COMPANY_ID&from=2026-06-01&to=2026-06-30"
 ```
 
 - [ ] HTTP 200
@@ -169,7 +169,7 @@ possible workarounds:
    directly via the `coreReadTables` whitelist:
 
    ```bash
-   paperclipai plugin bridge:action claude-token-cost-reports \
+   paperclipai plugin bridge:action openai-token-cost-reports \
      --payload-json "{\"key\":\"backfillFromCostEvents\",\"params\":{\"companyId\":\"$COMPANY_ID\",\"from\":\"$(date -u -v-7d +%Y-%m-%d)\",\"to\":\"$(date -u +%Y-%m-%d)\"}}" --json
    ```
 

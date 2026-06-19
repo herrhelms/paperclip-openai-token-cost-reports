@@ -12,11 +12,11 @@ Designed for operators on a **Claude Pro** or **Claude Max** subscription who wa
 
 ```bash
 # From inside a Paperclip-enabled environment with the CLI installed:
-paperclipai plugin install claude-token-cost-reports
+paperclipai plugin install openai-token-cost-reports
 
 # Verify the install
 paperclipai plugin list
-# expect: key=claude-token-cost-reports  status=ready  version=1.0.0-rc.2  id=<uuid>
+# expect: key=openai-token-cost-reports  status=ready  version=1.0.0-rc.2  id=<uuid>
 ```
 
 The host runs the plugin's database migrations automatically and registers the dashboard + settings page slots. No additional configuration is required to install — pricing and currency are set per-company in the Settings page after install.
@@ -121,7 +121,7 @@ The monthly CSV emits only `row.price` — operator-internal numbers (list cost,
 ## Monthly CSV export
 
 ```text
-GET /api/plugins/claude-token-cost-reports/api/export/monthly.csv?companyId=...&from=YYYY-MM-DD&to=YYYY-MM-DD
+GET /api/plugins/openai-token-cost-reports/api/export/monthly.csv?companyId=...&from=YYYY-MM-DD&to=YYYY-MM-DD
 ```
 
 Columns: `period, month_start, month_end, model, input_tokens, output_tokens, total_tokens, currency, price`.
@@ -154,7 +154,7 @@ The Paperclip host gates each of these on install. All are required for the plug
 
 ### Data model
 
-Private SQL namespace via `ctx.db` (`plugin_claude_token_cost_reports_c7ca204bbe`):
+Private SQL namespace via `ctx.db` (`plugin_openai_token_cost_reports_5d9ad52d0e`):
 
 - `usage_events(source_event_id PRIMARY KEY, company_id, agent_id, model, raw_model, provider, source, input_tokens, output_tokens, cached_input_tokens, cost_cents, occurred_at, day TEXT)` — append-only event log. `raw_model` preserves the literal model id (`claude-opus-4-7[1m]`) while `model` holds the normalized key; `provider` and `source` (`api` / `subscription`) drive the cost split.
 - `usage_daily(company_id, day TEXT, model, input_tokens, output_tokens, PRIMARY KEY(company_id, day, model))` — rolled-up daily totals.
@@ -191,7 +191,7 @@ Core-read tables (declared in manifest): `cost_events` — used by the backfill 
 
 ### API routes
 
-Mounted under `/api/plugins/claude-token-cost-reports/api/*`:
+Mounted under `/api/plugins/openai-token-cost-reports/api/*`:
 
 - `GET /export/monthly.csv?companyId=...&from=...&to=...` — streams the client-facing monthly CSV. `auth: board`.
 
@@ -203,17 +203,17 @@ Three names refer to the same thing; keep them aligned across npm, the host, and
 
 | Surface | Value | Where it's set |
 | --- | --- | --- |
-| npm package name | `claude-token-cost-reports` | `package.json` `name` |
-| In-app plugin key | `claude-token-cost-reports` | `src/manifest.ts` `id` |
-| Private DB namespace | `plugin_claude_token_cost_reports_c7ca204bbe` | derived by the host as `plugin_<slug-with-underscores>_<sha256(slug)[0:10]>` |
+| npm package name | `openai-token-cost-reports` | `package.json` `name` |
+| In-app plugin key | `openai-token-cost-reports` | `src/manifest.ts` `id` |
+| Private DB namespace | `plugin_openai_token_cost_reports_5d9ad52d0e` | derived by the host as `plugin_<slug-with-underscores>_<sha256(slug)[0:10]>` |
 
-The `c7ca204bbe` suffix is the first 10 hex characters of `sha256("claude-token-cost-reports")`. **Forks that rename the plugin must regenerate this suffix in every migration file** — the host computes the namespace from the slug at install time, and a stale suffix in the SQL makes every migration fail with "schema X does not exist". A one-liner to recompute:
+The `c7ca204bbe` suffix is the first 10 hex characters of `sha256("openai-token-cost-reports")`. **Forks that rename the plugin must regenerate this suffix in every migration file** — the host computes the namespace from the slug at install time, and a stale suffix in the SQL makes every migration fail with "schema X does not exist". A one-liner to recompute:
 
 ```bash
 node -e "console.log(require('crypto').createHash('sha256').update('your-new-slug').digest('hex').slice(0,10))"
 ```
 
-Then `sed -i '' 's/plugin_claude_token_cost_reports_c7ca204bbe/plugin_<new_slug>_<new_hash>/g' migrations/*.sql`. Tests do not catch this — the SQL runs at host install time, not at plugin build time.
+Then `sed -i '' 's/plugin_openai_token_cost_reports_5d9ad52d0e/plugin_<new_slug>_<new_hash>/g' migrations/*.sql`. Tests do not catch this — the SQL runs at host install time, not at plugin build time.
 
 ---
 
@@ -235,7 +235,7 @@ paperclipai plugin list
 For a clean reinstall during development:
 
 ```bash
-paperclipai plugin uninstall claude-token-cost-reports --force
+paperclipai plugin uninstall openai-token-cost-reports --force
 paperclipai plugin install -l .
 ```
 

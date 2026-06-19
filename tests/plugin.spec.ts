@@ -27,7 +27,7 @@ describe("manifest", () => {
   });
 
   it("uses the expected slug", () => {
-    expect(manifest.id).toMatch(/claude-token-cost-reports/);
+    expect(manifest.id).toMatch(/openai-token-cost-reports/);
   });
 
   it("declares the page slot with routePath 'tokens'", () => {

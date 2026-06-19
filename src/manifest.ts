@@ -1,7 +1,7 @@
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 
 const manifest: PaperclipPluginManifestV1 = {
-  id: "claude-token-cost-reports",
+  id: "openai-token-cost-reports",
   apiVersion: 1,
   version: "1.0.0-rc.3",
   displayName: "Claude Token Usage",
@@ -91,7 +91,7 @@ const manifest: PaperclipPluginManifestV1 = {
         // numbers, hyphens; no slashes. The host mounts this at the company-scoped
         // path it owns; we don't get to insert intermediate path segments.
         // "tokens" reads cleaner than "usage" since the host's prefix already
-        // contains the plugin key: /$COMPANY/plugins/claude-token-cost-reports/tokens.
+        // contains the plugin key: /$COMPANY/plugins/openai-token-cost-reports/tokens.
         routePath: "tokens",
       },
       {
