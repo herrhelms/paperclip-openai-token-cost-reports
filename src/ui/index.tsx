@@ -21,7 +21,7 @@ import {
 // company-relative path (leading slash, no company prefix) and the host
 // resolves the prefix at render time.
 const PLUGIN_KEY = "openai-token-cost-reports";
-const USAGE_ROUTE_SLUG = "tokens";
+const USAGE_ROUTE_SLUG = "oai-tokens";
 // Host router (confirmed against the installed bundle):
 //   path:"company/settings/instance/plugins/:pluginId"
 // — and :pluginId is the install UUID, NOT the plugin key. The UUID isn't
@@ -123,76 +123,49 @@ type DailyRow = {
 
 // Model keys mirror the worker's PRICED_MODEL_KEYS. Keep in sync.
 type ModelKey =
-  | "opus-4-8"
-  | "opus-4-8-1m"
-  | "opus-4-7"
-  | "opus-4-7-1m"
-  | "sonnet-4-6"
-  | "sonnet-4-6-1m"
-  | "sonnet-4-5"
-  | "sonnet-4-5-1m";
+  | "gpt-5-5"
+  | "gpt-5-5-pro"
+  | "gpt-5-4"
+  | "gpt-5-4-mini"
+  | "gpt-5-4-nano"
+  | "gpt-5-3-codex";
 
 const PRICED_MODEL_KEYS: ReadonlyArray<ModelKey> = [
-  "opus-4-8",
-  "opus-4-8-1m",
-  "opus-4-7",
-  "opus-4-7-1m",
-  "sonnet-4-6",
-  "sonnet-4-6-1m",
-  "sonnet-4-5",
-  "sonnet-4-5-1m",
-];
-
-type SubscriptionPreset = "off" | "pro" | "max";
-
-const SUBSCRIPTION_PRESETS: ReadonlyArray<{
-  key: SubscriptionPreset;
-  divisor: number;
-  label: string;
-}> = [
-  { key: "off", divisor: 1,  label: "Off — bill full list price" },
-  { key: "pro", divisor: 5,  label: "Claude Pro (÷5)" },
-  { key: "max", divisor: 20, label: "Claude Max (÷20)" },
+  "gpt-5-5",
+  "gpt-5-5-pro",
+  "gpt-5-4",
+  "gpt-5-4-mini",
+  "gpt-5-4-nano",
+  "gpt-5-3-codex",
 ];
 
 type PricingConfig = {
   pricing: Record<ModelKey, { input: number; output: number }>;
   margin: { percent: number };
-  subscription?: {
-    preset: SubscriptionPreset;
-    divisor: number;
-  };
 };
 
-// Defaults from https://platform.claude.com/docs/en/about-claude/pricing#model-pricing.
-// Opus 4.8 / 4.7 / Sonnet 4.6 INCLUDE the 1M context window at standard pricing per the
-// "Long context pricing" section. Sonnet 4.5 isn't listed there; default its [1m] variant
-// to the base rate so the line item exists if the operator's data uses it. Override either.
+// Defaults match the current public OpenAI API list prices from
+// https://platform.openai.com/docs/pricing. Override any row in settings.
 const DEFAULT_PRICING: PricingConfig = {
   pricing: {
-    "opus-4-8":      { input: 5, output: 25 },
-    "opus-4-8-1m":   { input: 5, output: 25 },
-    "opus-4-7":      { input: 5, output: 25 },
-    "opus-4-7-1m":   { input: 5, output: 25 },
-    "sonnet-4-6":    { input: 3, output: 15 },
-    "sonnet-4-6-1m": { input: 3, output: 15 },
-    "sonnet-4-5":    { input: 3, output: 15 },
-    "sonnet-4-5-1m": { input: 3, output: 15 },
+    "gpt-5-5":       { input: 5.00,  output: 30.00 },
+    "gpt-5-5-pro":   { input: 30.00, output: 180.00 },
+    "gpt-5-4":       { input: 2.50,  output: 15.00 },
+    "gpt-5-4-mini":  { input: 0.75,  output: 4.50 },
+    "gpt-5-4-nano":  { input: 0.20,  output: 1.25 },
+    "gpt-5-3-codex": { input: 1.75,  output: 14.00 },
   },
   margin: { percent: 0 },
-  subscription: { preset: "off", divisor: 1 },
 };
 
-// Display labels for the settings table. Match the user's requested format: "Opus 4.8", "Opus 4.8[1m]".
+// Display labels for the settings table.
 const MODEL_LABELS: Record<ModelKey, string> = {
-  "opus-4-8":      "Opus 4.8",
-  "opus-4-8-1m":   "Opus 4.8[1m]",
-  "opus-4-7":      "Opus 4.7",
-  "opus-4-7-1m":   "Opus 4.7[1m]",
-  "sonnet-4-6":    "Sonnet 4.6",
-  "sonnet-4-6-1m": "Sonnet 4.6[1m]",
-  "sonnet-4-5":    "Sonnet 4.5",
-  "sonnet-4-5-1m": "Sonnet 4.5[1m]",
+  "gpt-5-5":       "GPT-5.5",
+  "gpt-5-5-pro":   "GPT-5.5 Pro",
+  "gpt-5-4":       "GPT-5.4",
+  "gpt-5-4-mini":  "GPT-5.4 Mini",
+  "gpt-5-4-nano":  "GPT-5.4 Nano",
+  "gpt-5-3-codex": "GPT-5.3 Codex",
 };
 
 function normalizePricing(raw: unknown): PricingConfig | null {
@@ -207,48 +180,12 @@ function normalizePricing(raw: unknown): PricingConfig | null {
       out.pricing[k] = { input: row.input, output: row.output };
     }
   }
-  // Legacy: pre-0.2.0 configs had flat opus/sonnet/haiku keys.
-  // Carry forward into the most-recent base variant if the operator hasn't set the new key yet.
-  const legacyOpus = p.opus as { input?: unknown; output?: unknown } | undefined;
-  if (
-    legacyOpus &&
-    typeof legacyOpus.input === "number" &&
-    typeof legacyOpus.output === "number" &&
-    out.pricing["opus-4-7"].input === DEFAULT_PRICING.pricing["opus-4-7"].input
-  ) {
-    out.pricing["opus-4-7"] = { input: legacyOpus.input, output: legacyOpus.output };
-  }
-  const legacySonnet = p.sonnet as { input?: unknown; output?: unknown } | undefined;
-  if (
-    legacySonnet &&
-    typeof legacySonnet.input === "number" &&
-    typeof legacySonnet.output === "number" &&
-    out.pricing["sonnet-4-6"].input === DEFAULT_PRICING.pricing["sonnet-4-6"].input
-  ) {
-    out.pricing["sonnet-4-6"] = { input: legacySonnet.input, output: legacySonnet.output };
-  }
   const m = r.margin as { percent?: unknown } | undefined;
   if (m && typeof m.percent === "number") {
     out.margin.percent = m.percent;
   } else if (typeof (r as { marginPercent?: unknown }).marginPercent === "number") {
     // tolerate old flat shape if any was persisted
     out.margin.percent = (r as { marginPercent: number }).marginPercent;
-  }
-  // Subscription mode is optional (added in 0.7.0). Default to "off" when
-  // missing or malformed so pre-0.7.0 configs keep showing full list price.
-  const sub = r.subscription as
-    | { preset?: unknown; divisor?: unknown }
-    | undefined;
-  if (sub && (sub.preset === "off" || sub.preset === "pro" || sub.preset === "max")) {
-    const divisor =
-      typeof sub.divisor === "number" && sub.divisor > 0
-        ? sub.divisor
-        : sub.preset === "pro"
-          ? 5
-          : sub.preset === "max"
-            ? 20
-            : 1;
-    out.subscription = { preset: sub.preset, divisor };
   }
   return out;
 }
@@ -368,7 +305,7 @@ const THEME_CSS = `
 .tu-kpi-row {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 @media (max-width: 1399.98px) {
   .tu-kpi-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -737,12 +674,6 @@ type PerAgentResponse = {
   fxDay: string | null;
   fxSource: string | null;
   marginPercent: number;
-  // Optional for back-compat with workers older than 0.7.0.
-  subscription?: {
-    enabled: boolean;
-    preset: SubscriptionPreset;
-    divisor: number;
-  };
   rows: PerAgentBlock[];
 };
 
@@ -756,9 +687,9 @@ type SettingsLinkProps = {
 
 /**
  * Always-visible billing-config strip. Renders the inputs that turn raw token
- * counts into the billable total: period, currency + FX, margin, subscription
- * preset. The point is auditability — anyone looking at the dashboard can
- * defend the totals without opening Settings.
+ * counts into the billable total: period, currency + FX, margin. The point is
+ * auditability — anyone looking at the dashboard can defend the totals without
+ * opening Settings.
  */
 function BillingConfigStrip(props: {
   from: string;
@@ -768,9 +699,6 @@ function BillingConfigStrip(props: {
   fxDay: string | null;
   fxSource: string | null;
   marginPercent: number | null;
-  subscription:
-    | { enabled: boolean; preset: SubscriptionPreset; divisor: number }
-    | null;
   priced: boolean;
   settingsLinkProps: SettingsLinkProps;
 }): JSX.Element {
@@ -782,19 +710,9 @@ function BillingConfigStrip(props: {
     fxDay,
     fxSource,
     marginPercent,
-    subscription,
     priced,
     settingsLinkProps,
   } = props;
-  const subLabel = subscription?.enabled
-    ? `${
-        subscription.preset === "max"
-          ? "Claude Max"
-          : subscription.preset === "pro"
-            ? "Claude Pro"
-            : `Custom`
-      } (÷${subscription.divisor})`
-    : "Off (full list price)";
 
   const cell: React.CSSProperties = {
     display: "flex",
@@ -899,10 +817,6 @@ function BillingConfigStrip(props: {
         <span style={valueStyle}>
           {priced ? `${(marginPercent ?? 0).toFixed(1)}%` : "—"}
         </span>
-      </div>
-      <div style={cell}>
-        <span style={labelStyle}>Subscription</span>
-        <span style={valueStyle}>{subLabel}</span>
       </div>
       <div style={{ ...cell, marginLeft: "auto" }}>
         <a {...settingsLinkProps} style={styles.link}>
@@ -1158,14 +1072,6 @@ function PerAgentCard(props: {
   }
   const priced = !!d?.priced;
   const currency: CurrencyCode = (d?.currency ?? "USD") as CurrencyCode;
-  // Stable column labels — same vocabulary as the KPI cards above so the
-  // operator can scan "List price → Client price" across the dashboard
-  // without re-learning headers when subscription is toggled. The middle
-  // "Your cost" value isn't shown per-row (it'd add a column and the totals
-  // strip already surfaces it); operators who need the math see it explicitly
-  // on the page header config strip.
-  const costLabel = "List";
-  const priceLabel = "Client price";
 
   const colHead: React.CSSProperties = {
     fontSize: 11,
@@ -1210,7 +1116,7 @@ function PerAgentCard(props: {
         <h2 style={styles.sectionTitle}>By agent</h2>
         <span style={styles.mutedLabel}>
           {priced
-            ? `Tokens · Runs · ${costLabel} → ${priceLabel} (${currency})`
+            ? `Tokens · Runs · Cost → Price (${currency})`
             : "Tokens · Runs"}
         </span>
       </div>
@@ -1222,8 +1128,8 @@ function PerAgentCard(props: {
               <th style={colHead}>Runs</th>
               <th style={colHead}>Input</th>
               <th style={colHead}>Output</th>
-              {priced && <th style={colHead}>{costLabel}</th>}
-              {priced && <th style={colHead}>{priceLabel}</th>}
+              {priced && <th style={colHead}>Cost</th>}
+              {priced && <th style={colHead}>Price</th>}
             </tr>
           </thead>
           <tbody>
@@ -1287,23 +1193,8 @@ function PerAgentCard(props: {
         </div>
       ) : (
         <div style={{ marginTop: 12, fontSize: 11, color: "var(--muted-foreground)" }}>
-          {(() => {
-            const subEnabled = !!d?.subscription?.enabled;
-            const subDivisor = d?.subscription?.divisor ?? 1;
-            return subEnabled ? (
-              <>
-                <strong>List</strong> = tokens × per-1M API rate ·{" "}
-                <strong>Client price</strong> = List ÷ {subDivisor} × (1 +
-                margin {d?.marginPercent ?? 0}%)
-              </>
-            ) : (
-              <>
-                <strong>List</strong> = tokens × per-1M API rate ·{" "}
-                <strong>Client price</strong> = List × (1 + margin{" "}
-                {d?.marginPercent ?? 0}%)
-              </>
-            );
-          })()}
+          <strong>Cost</strong> = tokens × per-1M rate ·{" "}
+          <strong>Price</strong> = Cost × (1 + margin {d?.marginPercent ?? 0}%)
           {d?.fxRate && d.fxRate !== 1
             ? `, converted at 1 USD = ${d.fxRate.toFixed(4)} ${currency} (${d.fxDay ?? "?"})`
             : ""}
@@ -1569,18 +1460,8 @@ export function UsagePage(): JSX.Element {
         price_native += r.billable_usd;
       }
     }
-    // Net price = client price minus the margin uplift. This is what the
-    // operator actually owes Anthropic (list cost ÷ subscriptionDivisor) —
-    // the worker has already done that math for price_native, so backing
-    // out the margin gives us the post-divisor pre-margin number without
-    // having to re-multiply by the divisor on the client side. Falls back
-    // to cost_native when there's no margin to back out (subscription off
-    // + 0% margin → all three values match, which is correct).
-    const marginPercent = Number(daily.data?.marginPercent ?? 0) || 0;
-    const net_native =
-      marginPercent !== 0 ? price_native / (1 + marginPercent / 100) : price_native;
-    return { inp, out, cost_native, price_native, net_native, hasCost };
-  }, [dailyRows, daily.data?.marginPercent]);
+    return { inp, out, cost_native, price_native, hasCost };
+  }, [dailyRows]);
 
   // Download the CSV by fetching it and triggering an anchor with the `download`
   // attribute. This forces a real save instead of inline render, which is what
@@ -1744,7 +1625,7 @@ export function UsagePage(): JSX.Element {
             <FxStalenessChip fxDay={daily.data?.fxDay} currency={currency} />
           </div>
           <p style={styles.subtitle}>
-            Claude tokens consumed by this company. Used for client billing.
+            OpenAI tokens consumed by this company. Used for client billing.
           </p>
         </div>
         <div style={styles.controls}>
@@ -1850,7 +1731,7 @@ export function UsagePage(): JSX.Element {
       </div>
 
       {/* KPI row */}
-      {/* Always-visible audit strip — period · currency · margin · subscription. */}
+      {/* Always-visible audit strip — period · currency · margin. */}
       <BillingConfigStrip
         from={from}
         to={to}
@@ -1859,112 +1740,64 @@ export function UsagePage(): JSX.Element {
         fxDay={perAgent.data?.fxDay ?? perModel.data?.fxDay ?? daily.data?.fxDay ?? null}
         fxSource={perAgent.data?.fxSource ?? perModel.data?.fxSource ?? null}
         marginPercent={pricingConfig?.margin?.percent ?? perAgent.data?.marginPercent ?? null}
-        subscription={
-          pricingConfig?.subscription
-            ? {
-                enabled: pricingConfig.subscription.preset !== "off",
-                preset: pricingConfig.subscription.preset,
-                divisor: pricingConfig.subscription.divisor,
-              }
-            : perAgent.data?.subscription ?? null
-        }
         priced={hasPricing}
         settingsLinkProps={settingsLinkProps}
       />
 
-      {(() => {
-        // KPI labels are stable regardless of subscription/margin config — the
-        // label describes WHAT the number is, not which knobs produced it.
-        //   List price = tokens × per-1M API rate (no subscription, no margin)
-        //   Your cost  = list ÷ subscriptionDivisor (post-sub, pre-margin)
-        //   Client price = your cost × (1 + margin/100)
-        // When the operator runs without a subscription, "Your cost" = "List
-        // price" — that's correct and transparently signals the config.
-        const subEnabled =
-          (pricingConfig?.subscription?.preset ?? "off") !== "off";
-        const subDivisor = pricingConfig?.subscription?.divisor ?? 1;
-        const marginPct = pricingConfig?.margin?.percent ?? 0;
-        const yourCostFormula = subEnabled
-          ? `List ÷ ${subDivisor} (subscription discount applied)`
-          : "Equal to List — no subscription discount configured";
-        const clientPriceFormula = `Your cost × (1 + ${marginPct}% margin)`;
-        return (
-          <div className="tu-kpi-row" style={styles.kpiRow}>
-            <KpiCard
-              label="Total tokens"
-              value={fmtTokensPrecise(totals.inp + totals.out)}
-              loading={isLoading}
-            />
-            <KpiCard
-              label="Input"
-              value={fmtTokensPrecise(totals.inp)}
-              loading={isLoading}
-            />
-            <KpiCard
-              label="Output"
-              value={fmtTokensPrecise(totals.out)}
-              loading={isLoading}
-            />
-            <KpiCard
-              label={`List price (${currency})`}
-              value={
-                hasPricing && totals.hasCost
-                  ? fmtMoney(totals.cost_native, currency)
-                  : "—"
-              }
-              loading={isLoading}
-              sub={
-                !hasPricing ? (
-                  <a {...settingsLinkProps} style={styles.link}>
-                    Set pricing →
-                  </a>
-                ) : (
-                  <span
-                    style={styles.kpiSub}
-                    title="tokens × per-1M Anthropic API rate"
-                  >
-                    tokens × per-1M API rate
-                  </span>
-                )
-              }
-            />
-            <KpiCard
-              label={`Your cost (${currency})`}
-              value={
-                hasPricing && totals.hasCost
-                  ? fmtMoney(totals.net_native, currency)
-                  : "—"
-              }
-              loading={isLoading}
-              sub={
-                hasPricing ? (
-                  <span style={styles.kpiSub} title={yourCostFormula}>
-                    {subEnabled
-                      ? `after subscription ÷${subDivisor}`
-                      : "no subscription discount"}
-                  </span>
-                ) : undefined
-              }
-            />
-            <KpiCard
-              label={`Client price (${currency})`}
-              value={
-                hasPricing && totals.hasCost
-                  ? fmtMoney(totals.price_native, currency)
-                  : "—"
-              }
-              loading={isLoading}
-              sub={
-                hasPricing ? (
-                  <span style={styles.kpiSub} title={clientPriceFormula}>
-                    Your cost · +{marginPct}% margin
-                  </span>
-                ) : undefined
-              }
-            />
-          </div>
-        );
-      })()}
+      <div className="tu-kpi-row" style={styles.kpiRow}>
+        <KpiCard
+          label="Total tokens"
+          value={fmtTokensPrecise(totals.inp + totals.out)}
+          loading={isLoading}
+        />
+        <KpiCard
+          label="Input"
+          value={fmtTokensPrecise(totals.inp)}
+          loading={isLoading}
+        />
+        <KpiCard
+          label="Output"
+          value={fmtTokensPrecise(totals.out)}
+          loading={isLoading}
+        />
+        <KpiCard
+          label={`Cost (${currency})`}
+          value={
+            hasPricing && totals.hasCost
+              ? fmtMoney(totals.cost_native, currency)
+              : "—"
+          }
+          loading={isLoading}
+          sub={
+            !hasPricing ? (
+              <a {...settingsLinkProps} style={styles.link}>
+                Set pricing →
+              </a>
+            ) : (
+              <span style={styles.kpiSub}>tokens × per-1M rate</span>
+            )
+          }
+        />
+        <KpiCard
+          label={`Price (${currency})`}
+          value={
+            hasPricing && totals.hasCost
+              ? fmtMoney(totals.price_native, currency)
+              : "—"
+          }
+          loading={isLoading}
+          sub={
+            hasPricing ? (
+              <span
+                style={styles.kpiSub}
+                title={`Cost × (1 + ${pricingConfig?.margin?.percent ?? 0}% margin)`}
+              >
+                client invoice
+              </span>
+            ) : undefined
+          }
+        />
+      </div>
 
       {/* By model */}
       <PerModelCard
@@ -1995,9 +1828,9 @@ export function UsagePage(): JSX.Element {
         <div style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
           {hasPricing && pricingConfig ? (
             <>
-              Pricing configured. Opus 4.8 $
-              {pricingConfig.pricing["opus-4-8"].input}/$
-              {pricingConfig.pricing["opus-4-8"].output} per 1M tokens; margin{" "}
+              Pricing configured. GPT-5.5 $
+              {pricingConfig.pricing["gpt-5-5"].input}/$
+              {pricingConfig.pricing["gpt-5-5"].output} per 1M tokens; margin{" "}
               {pricingConfig.margin.percent}%.{" "}
               <a {...settingsLinkProps} style={styles.link}>
                 Edit rates →
@@ -2174,19 +2007,16 @@ export function SettingsPage(): JSX.Element {
           /{host?.companyPrefix ?? "$COMPANY_HANDLE"}/{USAGE_ROUTE_SLUG}
         </a>
         . Rates are in USD per 1M tokens. Defaults match the current public
-        Anthropic API list prices from{" "}
+        OpenAI API list prices from{" "}
         <a
-          href="https://platform.claude.com/docs/en/about-claude/pricing#model-pricing"
+          href="https://platform.openai.com/docs/pricing"
           target="_blank"
           rel="noreferrer"
           style={styles.link}
         >
-          platform.claude.com/docs/en/about-claude/pricing
+          platform.openai.com/docs/pricing
         </a>
-        . The <code>[1m]</code> variants track usage routed through the 1M-token
-        context window — for Opus 4.8 / 4.7 and Sonnet 4.6 the 1M window is
-        currently included at standard pricing; if Anthropic introduces a
-        long-context surcharge, edit those rows here.
+        . Edit any row if your contract or workload diverges from list price.
       </p>
 
       <table style={{ ...styles.table, marginTop: 16 }}>
@@ -2323,55 +2153,6 @@ export function SettingsPage(): JSX.Element {
         />
       </div>
 
-      <div style={{ marginTop: 20 }}>
-        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-          <label
-            style={{ fontSize: 13, color: "var(--tu-fg)" }}
-            htmlFor="subscription-preset"
-          >
-            Subscription
-          </label>
-          <select
-            id="subscription-preset"
-            value={config.subscription?.preset ?? "off"}
-            onChange={(e) => {
-              const preset = e.target.value as SubscriptionPreset;
-              const match =
-                SUBSCRIPTION_PRESETS.find((p) => p.key === preset) ??
-                SUBSCRIPTION_PRESETS[0];
-              setConfig((c) => ({
-                ...c,
-                subscription: { preset: match.key, divisor: match.divisor },
-              }));
-            }}
-            style={{ ...styles.input, width: 240 }}
-          >
-            {SUBSCRIPTION_PRESETS.map((p) => (
-              <option key={p.key} value={p.key}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <p
-          style={{
-            marginTop: 8,
-            fontSize: 12,
-            color: "var(--tu-muted)",
-            maxWidth: 640,
-          }}
-        >
-          When a subscription preset is active, the chargeback column on the
-          usage dashboard is divided by the preset's multiplier before margin
-          is applied. The list-price column is unchanged, so you can see the
-          subscription savings at a glance.
-          <br />
-          Example: $100 tokens · Pro (÷5) · 10% margin → cost $20 → price{" "}
-          <strong>$22</strong>. With margin in EUR at 0.80, that's{" "}
-          <strong>€17.60</strong>.
-        </p>
-      </div>
-
       <div style={{ marginTop: 24, display: "flex", gap: 12 }}>
         <button
           style={styles.btnPrimary}
@@ -2384,7 +2165,7 @@ export function SettingsPage(): JSX.Element {
           style={styles.btn}
           onClick={resetToDefaults}
           disabled={saving}
-          title="Restore the bundled Anthropic list prices for all 8 rows"
+          title="Restore the bundled OpenAI list prices for all rows"
         >
           Reset to defaults
         </button>
