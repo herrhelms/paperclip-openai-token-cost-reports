@@ -460,6 +460,7 @@ async function runBackfill(
             occurred_at::text    AS occurred_at
        FROM public.cost_events
       WHERE company_id = $1::uuid
+        AND provider = 'openai'
         AND occurred_at >= $2::timestamptz
         AND occurred_at <= $3::timestamptz`,
     [companyId, fromIso, toIso],
@@ -518,6 +519,16 @@ async function ingestEvent(ctx: PluginContext, event: PluginEvent): Promise<void
   const e = event as unknown as Record<string, unknown>;
   const payload = (event.payload ?? {}) as Record<string, unknown>;
 
+  // Plugin only ingests OpenAI events. Claude / Gemini / other-provider
+  // events are handled by sibling plugins. Filter before any side effects
+  // (no DB read, no DB write, no log write).
+  const provider = String(
+    payload.provider ?? payload.providerKey ?? "",
+  ).toLowerCase();
+  if (provider !== "openai") {
+    return;
+  }
+
   // Cost events get keyed by the cost_event row id ("cost_event:<id>") so
   // backfillFromCostEvents and live subscription land in the same keyspace —
   // a backfill window that overlaps the live ingest is a no-op via ON
@@ -552,11 +563,8 @@ async function ingestEvent(ctx: PluginContext, event: PluginEvent): Promise<void
   const cachedInputTokens = Number(
     payload.cachedInputTokens ?? payload.cached_input_tokens ?? 0,
   );
-  // Costs page tracks provider + source (subscription vs api) per event. Default to
-  // anthropic + api when the producer omits them so legacy callers still group.
-  const provider = String(
-    payload.provider ?? payload.providerKey ?? "anthropic",
-  ).toLowerCase();
+  // Costs page tracks source (subscription vs api) per event. Provider is
+  // resolved + filtered to "openai" at the top of this function.
   const source = String(
     payload.source ?? payload.billing ?? payload.billingMode ?? "api",
   ).toLowerCase();
@@ -1902,7 +1910,8 @@ const plugin = definePlugin({
       const [minRow] = await ctx.db.query<{ occurred_at: string | null }>(
         `SELECT MIN(occurred_at)::text AS occurred_at
            FROM public.cost_events
-          WHERE company_id = $1::uuid`,
+          WHERE company_id = $1::uuid
+            AND provider = 'openai'`,
         [companyId],
       );
       const earliest = minRow?.occurred_at;
@@ -1914,7 +1923,7 @@ const plugin = definePlugin({
           days: [] as string[],
           from: null,
           to: null,
-          message: "No cost events found for this company.",
+          message: "No OpenAI cost events found for this company.",
         };
       }
       const from = earliest.slice(0, 10);
