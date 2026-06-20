@@ -647,8 +647,10 @@ async function ingestEvent(ctx: PluginContext, event: PluginEvent): Promise<void
       ? Math.round(costCentsRaw)
       : null;
 
-  // Always log so the operator can see what's arriving and diagnose silently-dropped events.
-  ctx.logger.info("usage event received", {
+  // Per-event telemetry at debug level. Operators can raise log level
+  // when diagnosing silently-dropped events; default is quiet to avoid
+  // dumping per-event billing data into the steady-state log stream.
+  ctx.logger.debug("usage event received", {
     eventType: e.eventType ?? event.eventType,
     sourceEventId,
     companyId,
