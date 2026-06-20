@@ -321,6 +321,22 @@ async function getFxRate(
   return null;
 }
 
+// Sanity envelope for an USD-base FX rate. The 10 supported currencies
+// span roughly 0.5 (GBP) to 160 (JPY) historically; 0.01 .. 1000 catches
+// catastrophic upstream errors (e.g., a hijacked provider serving
+// inflated rates) while staying loose enough to absorb normal volatility.
+const FX_RATE_MIN = 0.01;
+const FX_RATE_MAX = 1000;
+
+export function isPlausibleFxRate(r: unknown): r is number {
+  return (
+    typeof r === "number" &&
+    Number.isFinite(r) &&
+    r >= FX_RATE_MIN &&
+    r <= FX_RATE_MAX
+  );
+}
+
 // Fetch latest USD-base rates from open.er-api.com and return the slice for
 // the supported currencies. Throws on transport / parse failure so the daily
 // job records a clean failure rather than persisting silently.
@@ -351,8 +367,18 @@ async function fetchFxFromProvider(
   const rates: Partial<Record<CurrencyCode, number>> = {};
   for (const c of SUPPORTED_CURRENCIES) {
     const r = body.rates[c];
-    if (typeof r === "number" && r > 0 && Number.isFinite(r)) {
+    if (isPlausibleFxRate(r)) {
       rates[c] = r;
+    } else if (r !== undefined) {
+      // Provider returned a value but it's outside the sanity envelope.
+      // Log and skip — better to fall through to the previous day's
+      // stored row than to persist a catastrophic outlier.
+      ctx.logger.warn("FX rate outside sanity envelope; skipping currency", {
+        currency: c,
+        provider_rate: r,
+        min: FX_RATE_MIN,
+        max: FX_RATE_MAX,
+      });
     }
   }
   return { day, rates, source: FX_PROVIDER_NAME };
