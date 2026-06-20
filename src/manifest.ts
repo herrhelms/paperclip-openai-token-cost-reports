@@ -3,7 +3,7 @@ import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 const manifest: PaperclipPluginManifestV1 = {
   id: "openai-token-cost-reports",
   apiVersion: 1,
-  version: "1.0.0-rc.1",
+  version: "1.0.0-rc.2",
   displayName: "OpenAI Token Usage",
   description:
     "Track OpenAI API token usage per company, accumulate daily totals, and export a monthly CSV priced at configurable per-model rates (GPT-5.5 / GPT-5.4 family, GPT-5.3 Codex). The dashboard is mounted at the host's company-scoped plugin page (open from the company sidebar) and per-company pricing is configured here in the plugin settings.",
@@ -90,10 +90,9 @@ const manifest: PaperclipPluginManifestV1 = {
         // Host validation: routePath must be a single lowercase slug — letters,
         // numbers, hyphens; no slashes. The host mounts this at the company-scoped
         // path it owns; we don't get to insert intermediate path segments.
-        // "tokens" reads cleaner than "usage" since the host's prefix already
-        // contains the plugin key: /$COMPANY/oai-tokens. "oai-" is the conventional
-        // short prefix for "openai-" in URL slugs.
-        routePath: "oai-tokens",
+        // "monthly-report-openai" reads naturally in the address bar:
+        // /$COMPANY/monthly-report-openai is the page title and the URL.
+        routePath: "monthly-report-openai",
       },
       {
         type: "settingsPage",

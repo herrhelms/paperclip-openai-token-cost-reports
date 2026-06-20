@@ -21,7 +21,7 @@ import {
 // company-relative path (leading slash, no company prefix) and the host
 // resolves the prefix at render time.
 const PLUGIN_KEY = "openai-token-cost-reports";
-const USAGE_ROUTE_SLUG = "oai-tokens";
+const USAGE_ROUTE_SLUG = "monthly-report-openai";
 // Host router (confirmed against the installed bundle):
 //   path:"company/settings/instance/plugins/:pluginId"
 // — and :pluginId is the install UUID, NOT the plugin key. The UUID isn't

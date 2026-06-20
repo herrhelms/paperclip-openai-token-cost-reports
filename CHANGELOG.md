@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-rc.2] - 2026-06-20
+### Changed
+- BREAKING: npm package renamed `openai-token-cost-reports` → `@herrhelms/openai-token-cost-reports` so installs match the user's npm scope. The in-app plugin key (`id` in manifest) and DB namespace stay as `openai-token-cost-reports` / `plugin_openai_token_cost_reports_5d9ad52d0e` — only the npm name changed.
+- BREAKING: dashboard `routePath` renamed `oai-tokens` → `monthly-report-openai`. Dashboard URL becomes `/$COMPANY/monthly-report-openai`. The Claude-era `/$COMPANY/tokens` and previous `/$COMPANY/oai-tokens` no longer resolve.
+
 ## [1.0.0-rc.1] - 2026-06-19
 ### Added
 - Initial release. Forked from `claude-token-cost-reports` v1.0.0-rc.3 (`github.com/herrhelms/paperclip-claude-token-cost-reports`).

@@ -27,14 +27,14 @@ describe("manifest", () => {
     expect(manifest.id).toMatch(/openai-token-cost-reports/);
   });
 
-  it("declares the page slot with routePath 'oai-tokens'", () => {
+  it("declares the page slot with routePath 'monthly-report-openai'", () => {
     const slots = (manifest.ui?.slots ?? []) as Array<{
       type: string;
       routePath?: string;
     }>;
     const page = slots.find((s) => s.type === "page");
     expect(page).toBeTruthy();
-    expect(page?.routePath).toBe("oai-tokens");
+    expect(page?.routePath).toBe("monthly-report-openai");
   });
 
   it("declares a settingsPage slot without routePath", () => {

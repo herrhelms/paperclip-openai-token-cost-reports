@@ -106,7 +106,7 @@ output. Reopen blocker #4 with the production reproduction.
 Open the dashboard in a browser:
 
 ```
-/$COMPANY_HANDLE/oai-tokens
+/$COMPANY_HANDLE/monthly-report-openai
 ```
 
 - [ ] The page renders without console errors
@@ -123,7 +123,7 @@ Open the settings page:
 
 - [ ] All per-model rate inputs are editable
 - [ ] Save persists; reloading the page shows the saved values
-- [ ] The "Open usage dashboard →" link navigates back to `/oai-tokens`
+- [ ] The "Open usage dashboard →" link navigates back to `/monthly-report-openai`
 
 ## 7. Monthly CSV export
 

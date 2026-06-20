@@ -12,11 +12,11 @@ Designed for operators on the OpenAI API who want to bill clients in a real curr
 
 ```bash
 # From inside a Paperclip-enabled environment with the CLI installed:
-paperclipai plugin install openai-token-cost-reports
+paperclipai plugin install @herrhelms/openai-token-cost-reports
 
 # Verify the install
 paperclipai plugin list
-# expect: key=openai-token-cost-reports  status=ready  version=1.0.0-rc.1  id=<uuid>
+# expect: key=openai-token-cost-reports  status=ready  version=1.0.0-rc.2  id=<uuid>
 ```
 
 The host runs the plugin's database migrations automatically and registers the dashboard + settings page slots. No additional configuration is required to install — pricing and currency are set per-company in the Settings page after install.
@@ -32,7 +32,7 @@ The host runs the plugin's database migrations automatically and registers the d
 
 | Surface | Where to find it | What's there |
 | --- | --- | --- |
-| Dashboard | `/$COMPANY_HANDLE/oai-tokens` (in the company sidebar) | Usage KPIs, per-model bars, per-agent table, daily chart, monthly CSV export |
+| Dashboard | `/$COMPANY_HANDLE/monthly-report-openai` (in the company sidebar) | Usage KPIs, per-model bars, per-agent table, daily chart, monthly CSV export |
 | Settings | `/$COMPANY_HANDLE/company/settings/instance/plugins/<install-uuid>` | Per-model pricing, margin, currency, FX-rate status |
 
 The `<install-uuid>` is shown by `paperclipai plugin list` after install.
@@ -48,7 +48,7 @@ After install, open the Settings page for any company:
 3. (Optional) **Adjust per-model rates.** Defaults are seeded from current OpenAI list prices for GPT-5.5, GPT-5.4, and GPT-5.3-codex families.
 4. **Backfill historical events.** The Settings page has a `Backfill from history` button (for the current period) and `Backfill all history` (since the company's first cost event). The plugin reads directly from the host's `public.cost_events` table via the `coreReadTables` whitelist, so historical data from before the plugin install is available immediately.
 
-Then open `/$COMPANY_HANDLE/oai-tokens` — the dashboard reflects the configuration within a second.
+Then open `/$COMPANY_HANDLE/monthly-report-openai` — the dashboard reflects the configuration within a second.
 
 ---
 
@@ -59,7 +59,7 @@ Then open `/$COMPANY_HANDLE/oai-tokens` — the dashboard reflects the configura
 - Fetches a daily USD→target FX rate from `open.er-api.com` and stores one row per `(day, currency)` in `fx_rates`. Only fetches for currencies at least one company has configured.
 - Cleans up automatically when a company is archived (purges `usage_events`, `usage_daily`, `pricing_config`, currency state).
 
-### Dashboard at `/$COMPANY/oai-tokens`
+### Dashboard at `/$COMPANY/monthly-report-openai`
 
 - 5 KPI cards: total tokens, input, output, cost (pre-margin), price (chargeback).
 - Per-model horizontal bar chart with native-currency cost and price.
@@ -178,7 +178,7 @@ Three names refer to the same thing; keep them aligned across npm, the host, and
 
 | Surface | Value | Where it's set |
 | --- | --- | --- |
-| npm package name | `openai-token-cost-reports` | `package.json` `name` |
+| npm package name | `@herrhelms/openai-token-cost-reports` | `package.json` `name` |
 | In-app plugin key | `openai-token-cost-reports` | `src/manifest.ts` `id` |
 | Private DB namespace | `plugin_openai_token_cost_reports_5d9ad52d0e` | derived by the host as `plugin_<slug-with-underscores>_<sha256(slug)[0:10]>` |
 
