@@ -6,3 +6,8 @@ dist
 
 # Local agent / IDE state (per-developer; never published).
 .claude/
+
+# Internal docs (TODO lists, install checklists, spec drafts) — not part
+# of the published plugin or the public repo. README.md + CHANGELOG.md
+# are the only consumer-facing docs.
+docs/
