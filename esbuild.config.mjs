@@ -10,10 +10,12 @@ const workerConfig = {
   target: "node22",
   outfile: "dist/worker.js",
   sourcemap: true,
-  // @paperclipai/plugin-sdk is provided by the host runtime; bundling it would
-  // (a) bloat the worker by ~300 KB and (b) risk a duplicate-instance bug if
-  // the SDK exposes any module-level state.
-  external: ["react", "react-dom", "@paperclipai/plugin-sdk"],
+  // @paperclipai/plugin-sdk is bundled into the worker so the plugin works
+  // when installed from npm under <prefix>/node_modules/@scope/<name>/ where
+  // the SDK is NOT in the resolution chain. The bundle grows ~180 KB but the
+  // install is self-contained — verified against `paperclipai plugin install`
+  // landing the package in /Users/seb/.paperclip/plugins/node_modules/.
+  external: ["react", "react-dom"],
   logLevel: "info",
 };
 
@@ -25,7 +27,9 @@ const manifestConfig = {
   target: "node22",
   outfile: "dist/manifest.js",
   sourcemap: true,
-  external: ["@paperclipai/plugin-sdk"],
+  // Manifest is tiny and only imports the SDK for its TypeScript types;
+  // bundling keeps the install resolution-chain independent like the worker.
+  external: [],
   logLevel: "info",
 };
 
