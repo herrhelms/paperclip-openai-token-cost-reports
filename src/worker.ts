@@ -105,6 +105,28 @@ function q(ctx: PluginContext, table: string): string {
   return `${ctx.db.namespace}.${table}`;
 }
 
+// Strict ISO-date guard for query params that flow into SQL bindings and
+// HTTP response headers. Accepts the YYYY-MM-DD shape only — rejects
+// embedded quotes/CRLFs that would break the Content-Disposition filename
+// or smuggle a response header.
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+export function isIsoDate(s: unknown): s is string {
+  return typeof s === "string" && ISO_DATE_RE.test(s);
+}
+
+// RFC 4180 cell escape. Wraps a value in double quotes and doubles any
+// internal quote IF the value contains a comma, quote, CR, or LF;
+// otherwise returns the value unchanged. Safe for the CSV's current cells
+// (numbers, allow-listed currency codes, static labels) AND defensive
+// against future cells that surface raw_model or other user-derived text.
+export function csvCell(value: string | number): string {
+  const s = String(value);
+  if (/[",\r\n]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
 function pricingScope(companyId: string) {
   return {
     scopeKind: "company" as const,
@@ -839,8 +861,10 @@ async function buildClientMonthlyCsv(
       return totalB - totalA;
     });
 
-  const header =
-    "period,month_start,month_end,model,input_tokens,output_tokens,total_tokens,currency,price";
+  const header = [
+    "period", "month_start", "month_end", "model",
+    "input_tokens", "output_tokens", "total_tokens", "currency", "price",
+  ].map(csvCell).join(",");
 
   // Build per-row strings and accumulate per-month subtotals as we go. When
   // the export spans 2+ months we emit a "TOTAL" row after each month's
@@ -880,7 +904,7 @@ async function buildClientMonthlyCsv(
         total,
         currencyCfg.currency,
         priceNative === null ? "" : priceNative.toFixed(2),
-      ].join(","),
+      ].map(csvCell).join(","),
     );
     if (multiMonth) {
       let s = subtotalByMonth.get(b.month);
@@ -927,7 +951,7 @@ async function buildClientMonthlyCsv(
               s.total_tokens,
               currencyCfg.currency,
               s.price === null ? "" : s.price.toFixed(2),
-            ].join(","),
+            ].map(csvCell).join(","),
           );
         }
       }
@@ -1955,11 +1979,11 @@ const plugin = definePlugin({
     const to = String(
       Array.isArray(input.query.to) ? input.query.to[0] : input.query.to ?? "",
     );
-    if (!companyId || !from || !to) {
+    if (!companyId || !isIsoDate(from) || !isIsoDate(to)) {
       return {
         status: 400,
         headers: { "content-type": "text/plain" },
-        body: "companyId, from, to are required",
+        body: "companyId required; from + to must be YYYY-MM-DD",
       };
     }
     if (!ctx) return { status: 500, body: { error: "worker not initialized" } };

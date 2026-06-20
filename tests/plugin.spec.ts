@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import manifest from "../src/manifest";
 import {
+  csvCell,
+  isIsoDate,
   isPricingConfig,
   normalizeModel,
   PRICED_MODEL_KEYS,
@@ -229,5 +231,52 @@ describe("slugifyForFilename", () => {
   it("returns an empty string when nothing survives", () => {
     expect(slugifyForFilename("////")).toBe("");
     expect(slugifyForFilename("")).toBe("");
+  });
+});
+
+describe("isIsoDate", () => {
+  it("accepts canonical YYYY-MM-DD", () => {
+    expect(isIsoDate("2026-06-20")).toBe(true);
+    expect(isIsoDate("2000-01-01")).toBe(true);
+  });
+
+  it("rejects non-strings", () => {
+    expect(isIsoDate(undefined)).toBe(false);
+    expect(isIsoDate(null)).toBe(false);
+    expect(isIsoDate(20260620)).toBe(false);
+  });
+
+  it("rejects shapes that aren't YYYY-MM-DD", () => {
+    expect(isIsoDate("")).toBe(false);
+    expect(isIsoDate("2026/06/20")).toBe(false);
+    expect(isIsoDate("26-06-20")).toBe(false);
+    expect(isIsoDate("2026-6-20")).toBe(false);
+  });
+
+  it("rejects values containing quotes or CRLF (header-injection vector)", () => {
+    expect(isIsoDate('2026-06-20"')).toBe(false);
+    expect(isIsoDate("2026-06-20\r\nX-Foo: bar")).toBe(false);
+    expect(isIsoDate("2026-06-20\nA")).toBe(false);
+  });
+});
+
+describe("csvCell", () => {
+  it("returns values unchanged when they contain no special chars", () => {
+    expect(csvCell("hello")).toBe("hello");
+    expect(csvCell(42)).toBe("42");
+    expect(csvCell("EUR")).toBe("EUR");
+  });
+
+  it("quotes and escapes when value contains a comma", () => {
+    expect(csvCell("a,b")).toBe('"a,b"');
+  });
+
+  it("quotes and doubles internal quotes", () => {
+    expect(csvCell('he said "hi"')).toBe('"he said ""hi"""');
+  });
+
+  it("quotes when value contains CR or LF", () => {
+    expect(csvCell("line1\nline2")).toBe('"line1\nline2"');
+    expect(csvCell("line1\rline2")).toBe('"line1\rline2"');
   });
 });
