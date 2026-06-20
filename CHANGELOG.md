@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-06-20
+### Changed
+- README: Install section now documents the install / uninstall slug asymmetry. The npm package is scoped (`@herrhelms/…`) but the in-app plugin key is not, so install uses `@herrhelms/openai-token-cost-reports` while uninstall uses `openai-token-cost-reports`.
+
 ## [1.0.0] - 2026-06-20
 
 First GA release on the npm registry. Folds the rc.1 / rc.2 staging history into one published release; the pre-publish audit pass from the Claude sibling plugin (`@herrhelms/claude-token-cost-reports@1.0.0`) was mirrored here, plus the 1.0.1 SDK-bundling fix from that same plugin's first install.
