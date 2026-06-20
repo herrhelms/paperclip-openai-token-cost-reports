@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-06-20
+### Added
+- 6 new rows in the priced model table to cover the rest of OpenAI's published per-token list (developers.openai.com/api/docs/pricing, 2026-06-20 fetch): `gpt-5-4-pro` ($30 / $180 — same shape as `gpt-5-5-pro`), `chat-latest` ($5 / $30), `computer-use-preview` ($1.50 / $6), `o3-deep-research` ($5 / $20), `o4-mini-deep-research` ($1 / $4), `o4-mini` ($4 / $16, used as the fallback target for date-stamped fine-tuning snapshots like `o4-mini-2025-04-16`).
+- `normalizeModel` now strips ISO date snapshot suffixes (`-YYYY-MM-DD`) before re-running exact match, and recognises the o-series family (o3 / o4 with optional `-mini` and optional `-deep-research`). The host audit on the live Paperclip instance shows no OpenAI events yet — this widening is preemptive, not in response to broken pricing in production. Each row is documented inline against the upstream price doc.
+
+### Fixed
+- `CSV_MODEL_LABELS` was a fork artifact — it still carried the Claude Opus/Sonnet labels from the original `claude-token-cost-reports` fork point. CSV exports would have mislabeled OpenAI model columns the moment the export route was used. Replaced with the correct GPT-5 / o-series labels.
+
+### Note
+- Cached-input pricing (a separate column on the upstream page, ~10% of the input rate for most models) is NOT currently tracked per-event by this plugin. Operators with a high cache-hit ratio can override the input rate in Settings to reflect their effective blended rate. Full cached-input modelling is tracked for the operator-extensible matrix work (2.0.0).
+
 ## [1.0.1] - 2026-06-20
 ### Changed
 - README: Install section now documents the install / uninstall slug asymmetry. The npm package is scoped (`@herrhelms/…`) but the in-app plugin key is not, so install uses `@herrhelms/openai-token-cost-reports` while uninstall uses `openai-token-cost-reports`.

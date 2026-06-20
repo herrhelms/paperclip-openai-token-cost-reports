@@ -16,7 +16,7 @@ paperclipai plugin install @herrhelms/openai-token-cost-reports
 
 # Verify the install
 paperclipai plugin list
-# expect: key=openai-token-cost-reports  status=ready  version=1.0.1  id=<uuid>
+# expect: key=openai-token-cost-reports  status=ready  version=1.0.2  id=<uuid>
 ```
 
 The host runs the plugin's database migrations automatically and registers the dashboard + settings page slots. No additional configuration is required to install — pricing and currency are set per-company in the Settings page after install.

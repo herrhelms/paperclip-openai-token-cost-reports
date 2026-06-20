@@ -128,7 +128,13 @@ type ModelKey =
   | "gpt-5-4"
   | "gpt-5-4-mini"
   | "gpt-5-4-nano"
-  | "gpt-5-3-codex";
+  | "gpt-5-4-pro"
+  | "gpt-5-3-codex"
+  | "chat-latest"
+  | "computer-use-preview"
+  | "o3-deep-research"
+  | "o4-mini-deep-research"
+  | "o4-mini";
 
 const PRICED_MODEL_KEYS: ReadonlyArray<ModelKey> = [
   "gpt-5-5",
@@ -136,7 +142,13 @@ const PRICED_MODEL_KEYS: ReadonlyArray<ModelKey> = [
   "gpt-5-4",
   "gpt-5-4-mini",
   "gpt-5-4-nano",
+  "gpt-5-4-pro",
   "gpt-5-3-codex",
+  "chat-latest",
+  "computer-use-preview",
+  "o3-deep-research",
+  "o4-mini-deep-research",
+  "o4-mini",
 ];
 
 type PricingConfig = {
@@ -146,26 +158,39 @@ type PricingConfig = {
 
 // Defaults match the current public OpenAI API list prices from
 // https://platform.openai.com/docs/pricing. Override any row in settings.
+// Rates from https://developers.openai.com/api/docs/pricing, 2026-06-20 fetch.
 const DEFAULT_PRICING: PricingConfig = {
   pricing: {
-    "gpt-5-5":       { input: 5.00,  output: 30.00 },
-    "gpt-5-5-pro":   { input: 30.00, output: 180.00 },
-    "gpt-5-4":       { input: 2.50,  output: 15.00 },
-    "gpt-5-4-mini":  { input: 0.75,  output: 4.50 },
-    "gpt-5-4-nano":  { input: 0.20,  output: 1.25 },
-    "gpt-5-3-codex": { input: 1.75,  output: 14.00 },
+    "gpt-5-5":               { input: 5.00,  output: 30.00 },
+    "gpt-5-5-pro":           { input: 30.00, output: 180.00 },
+    "gpt-5-4":               { input: 2.50,  output: 15.00 },
+    "gpt-5-4-mini":          { input: 0.75,  output: 4.50 },
+    "gpt-5-4-nano":          { input: 0.20,  output: 1.25 },
+    "gpt-5-4-pro":           { input: 30.00, output: 180.00 },
+    "gpt-5-3-codex":         { input: 1.75,  output: 14.00 },
+    "chat-latest":           { input: 5.00,  output: 30.00 },
+    "computer-use-preview":  { input: 1.50,  output: 6.00 },
+    "o3-deep-research":      { input: 5.00,  output: 20.00 },
+    "o4-mini-deep-research": { input: 1.00,  output: 4.00 },
+    "o4-mini":               { input: 4.00,  output: 16.00 },
   },
   margin: { percent: 0 },
 };
 
 // Display labels for the settings table.
 const MODEL_LABELS: Record<ModelKey, string> = {
-  "gpt-5-5":       "GPT-5.5",
-  "gpt-5-5-pro":   "GPT-5.5 Pro",
-  "gpt-5-4":       "GPT-5.4",
-  "gpt-5-4-mini":  "GPT-5.4 Mini",
-  "gpt-5-4-nano":  "GPT-5.4 Nano",
-  "gpt-5-3-codex": "GPT-5.3 Codex",
+  "gpt-5-5":               "GPT-5.5",
+  "gpt-5-5-pro":           "GPT-5.5 Pro",
+  "gpt-5-4":               "GPT-5.4",
+  "gpt-5-4-mini":          "GPT-5.4 Mini",
+  "gpt-5-4-nano":          "GPT-5.4 Nano",
+  "gpt-5-4-pro":           "GPT-5.4 Pro",
+  "gpt-5-3-codex":         "GPT-5.3 Codex",
+  "chat-latest":           "ChatGPT (chat-latest)",
+  "computer-use-preview":  "Computer Use Preview",
+  "o3-deep-research":      "o3 Deep Research",
+  "o4-mini-deep-research": "o4 Mini Deep Research",
+  "o4-mini":               "o4 Mini",
 };
 
 function normalizePricing(raw: unknown): PricingConfig | null {

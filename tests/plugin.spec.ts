@@ -130,6 +130,20 @@ describe("normalizeModel", () => {
     expect(normalizeModel("gpt-5.4-mini-2025-12-08")).toBe("gpt-5-4-mini");
   });
 
+  it("recognizes o-series reasoning + specialty models", () => {
+    expect(normalizeModel("o4-mini")).toBe("o4-mini");
+    expect(normalizeModel("o4-mini-deep-research")).toBe("o4-mini-deep-research");
+    expect(normalizeModel("o3-deep-research")).toBe("o3-deep-research");
+    expect(normalizeModel("chat-latest")).toBe("chat-latest");
+    expect(normalizeModel("computer-use-preview")).toBe("computer-use-preview");
+    expect(normalizeModel("gpt-5.4-pro")).toBe("gpt-5-4-pro");
+  });
+
+  it("strips ISO-date snapshot suffix to match generic key", () => {
+    expect(normalizeModel("o4-mini-2025-04-16")).toBe("o4-mini");
+    expect(normalizeModel("o3-deep-research-2026-01-15")).toBe("o3-deep-research");
+  });
+
   it("returns 'unknown' for unrelated families", () => {
     expect(normalizeModel("claude-opus-4-7")).toBe("unknown");
     expect(normalizeModel("gemini-2.0-pro")).toBe("unknown");
@@ -141,12 +155,18 @@ describe("normalizeModel", () => {
 
 const FULL_PRICING: PricingConfig = {
   pricing: {
-    "gpt-5-5":       { input: 5, output: 30 },
-    "gpt-5-5-pro":   { input: 30, output: 180 },
-    "gpt-5-4":       { input: 2.5, output: 15 },
-    "gpt-5-4-mini":  { input: 0.75, output: 4.5 },
-    "gpt-5-4-nano":  { input: 0.2,  output: 1.25 },
-    "gpt-5-3-codex": { input: 1.75, output: 14 },
+    "gpt-5-5":               { input: 5, output: 30 },
+    "gpt-5-5-pro":           { input: 30, output: 180 },
+    "gpt-5-4":               { input: 2.5, output: 15 },
+    "gpt-5-4-mini":          { input: 0.75, output: 4.5 },
+    "gpt-5-4-nano":          { input: 0.2, output: 1.25 },
+    "gpt-5-4-pro":           { input: 30, output: 180 },
+    "gpt-5-3-codex":         { input: 1.75, output: 14 },
+    "chat-latest":           { input: 5, output: 30 },
+    "computer-use-preview":  { input: 1.5, output: 6 },
+    "o3-deep-research":      { input: 5, output: 20 },
+    "o4-mini-deep-research": { input: 1, output: 4 },
+    "o4-mini":               { input: 4, output: 16 },
   },
   margin: { percent: 0 },
 };

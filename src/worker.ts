@@ -18,7 +18,13 @@ export type ModelKey =
   | "gpt-5-4"
   | "gpt-5-4-mini"
   | "gpt-5-4-nano"
+  | "gpt-5-4-pro"
   | "gpt-5-3-codex"
+  | "chat-latest"
+  | "computer-use-preview"
+  | "o3-deep-research"
+  | "o4-mini-deep-research"
+  | "o4-mini"
   | "unknown";
 
 export const PRICED_MODEL_KEYS: ReadonlyArray<Exclude<ModelKey, "unknown">> = [
@@ -27,7 +33,13 @@ export const PRICED_MODEL_KEYS: ReadonlyArray<Exclude<ModelKey, "unknown">> = [
   "gpt-5-4",
   "gpt-5-4-mini",
   "gpt-5-4-nano",
+  "gpt-5-4-pro",
   "gpt-5-3-codex",
+  "chat-latest",
+  "computer-use-preview",
+  "o3-deep-research",
+  "o4-mini-deep-research",
+  "o4-mini",
 ];
 
 type PricingRates = Record<Exclude<ModelKey, "unknown">, { input: number; output: number }>;
@@ -45,15 +57,24 @@ interface DailyRow {
   output_tokens: number;
 }
 
-// NEW — rates from developers.openai.com/api/docs/pricing, fetched 2026-06-19
+// Rates from https://developers.openai.com/api/docs/pricing, 2026-06-20 fetch.
+// Cached-input pricing is NOT currently tracked per-event by this plugin;
+// the published cached-input rates are documented in the README for operators
+// who want to override the input rate to reflect their cache hit ratio.
 const DEFAULT_PRICING: PricingConfig = {
   pricing: {
-    "gpt-5-5":       { input: 5.00,  output: 30.00 },
-    "gpt-5-5-pro":   { input: 30.00, output: 180.00 },
-    "gpt-5-4":       { input: 2.50,  output: 15.00 },
-    "gpt-5-4-mini":  { input: 0.75,  output: 4.50 },
-    "gpt-5-4-nano":  { input: 0.20,  output: 1.25 },
-    "gpt-5-3-codex": { input: 1.75,  output: 14.00 },
+    "gpt-5-5":               { input: 5.00,  output: 30.00 },
+    "gpt-5-5-pro":           { input: 30.00, output: 180.00 },
+    "gpt-5-4":               { input: 2.50,  output: 15.00 },
+    "gpt-5-4-mini":          { input: 0.75,  output: 4.50 },
+    "gpt-5-4-nano":          { input: 0.20,  output: 1.25 },
+    "gpt-5-4-pro":           { input: 30.00, output: 180.00 },
+    "gpt-5-3-codex":         { input: 1.75,  output: 14.00 },
+    "chat-latest":           { input: 5.00,  output: 30.00 },
+    "computer-use-preview":  { input: 1.50,  output: 6.00 },
+    "o3-deep-research":      { input: 5.00,  output: 20.00 },
+    "o4-mini-deep-research": { input: 1.00,  output: 4.00 },
+    "o4-mini":               { input: 4.00,  output: 16.00 },
   },
   margin: { percent: 0 },
 };
@@ -66,17 +87,39 @@ export function normalizeModel(raw: unknown): ModelKey {
   const remap = LEGACY_MODEL_REMAP[s];
   if (remap) return remap;
   if (s in DEFAULT_PRICING.pricing) return s as ModelKey;
+  // Strip ISO date snapshot suffix (-YYYY-MM-DD) and retry exact match.
+  // E.g. "o4-mini-2025-04-16" -> "o4-mini".
+  const noSnapshot = s.replace(/-\d{4}-\d{2}-\d{2}$/, "");
+  if (noSnapshot !== s && noSnapshot in DEFAULT_PRICING.pricing) {
+    return noSnapshot as ModelKey;
+  }
   // Exact codex check first — its slug doesn't fit the version-suffix pattern.
   if (/^gpt-5[._-]?3[._-]codex/.test(s)) return "gpt-5-3-codex";
-  // Then look for gpt-5.X with optional suffix.
+  // gpt-5.X with optional suffix.
   const m = s.match(/^gpt-5[._-]?(\d)(?:[._-](pro|mini|nano))?/);
-  if (!m) return "unknown";
-  const minor = m[1];
-  const variant = m[2];
-  const candidate = variant
-    ? (`gpt-5-${minor}-${variant}` as ModelKey)
-    : (`gpt-5-${minor}` as ModelKey);
-  if (candidate in DEFAULT_PRICING.pricing) return candidate;
+  if (m) {
+    const minor = m[1];
+    const variant = m[2];
+    const candidate = variant
+      ? (`gpt-5-${minor}-${variant}` as ModelKey)
+      : (`gpt-5-${minor}` as ModelKey);
+    if (candidate in DEFAULT_PRICING.pricing) return candidate;
+  }
+  // o-series family: o3 / o4 with optional -mini, optional -deep-research.
+  // Snapshot suffixes were stripped above. Examples: "o3-deep-research",
+  // "o4-mini", "o4-mini-deep-research".
+  const oMatch = s.match(/^(o[34])(?:[._-](mini|pro))?(?:[._-](deep[._-]research))?/);
+  if (oMatch) {
+    const base = oMatch[1];
+    const size = oMatch[2];
+    const deepResearch = oMatch[3];
+    let candidate: string;
+    if (deepResearch && size === "mini") candidate = `${base}-mini-deep-research`;
+    else if (deepResearch) candidate = `${base}-deep-research`;
+    else if (size) candidate = `${base}-${size}`;
+    else candidate = base;
+    if (candidate in DEFAULT_PRICING.pricing) return candidate as ModelKey;
+  }
   return "unknown";
 }
 
@@ -810,16 +853,20 @@ export function slugifyForFilename(name: string): string {
 }
 
 // Display labels for the CSV — match the UI's MODEL_LABELS so the client's
-// spreadsheet reads "Opus 4.7[1m]" instead of the internal "opus-4-7-1m".
+// spreadsheet reads "GPT-5.5" instead of the internal "gpt-5-5".
 const CSV_MODEL_LABELS: Record<string, string> = {
-  "opus-4-8": "Opus 4.8",
-  "opus-4-8-1m": "Opus 4.8[1m]",
-  "opus-4-7": "Opus 4.7",
-  "opus-4-7-1m": "Opus 4.7[1m]",
-  "sonnet-4-6": "Sonnet 4.6",
-  "sonnet-4-6-1m": "Sonnet 4.6[1m]",
-  "sonnet-4-5": "Sonnet 4.5",
-  "sonnet-4-5-1m": "Sonnet 4.5[1m]",
+  "gpt-5-5": "GPT-5.5",
+  "gpt-5-5-pro": "GPT-5.5 Pro",
+  "gpt-5-4": "GPT-5.4",
+  "gpt-5-4-mini": "GPT-5.4 Mini",
+  "gpt-5-4-nano": "GPT-5.4 Nano",
+  "gpt-5-4-pro": "GPT-5.4 Pro",
+  "gpt-5-3-codex": "GPT-5.3 Codex",
+  "chat-latest": "ChatGPT (chat-latest)",
+  "computer-use-preview": "Computer Use Preview",
+  "o3-deep-research": "o3 Deep Research",
+  "o4-mini-deep-research": "o4 Mini Deep Research",
+  "o4-mini": "o4 Mini",
 };
 
 // Client-facing CSV: one row per (calendar-month, model) showing tokens and
