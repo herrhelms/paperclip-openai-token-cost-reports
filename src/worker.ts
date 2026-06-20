@@ -1419,13 +1419,21 @@ const plugin = definePlugin({
 
     ctx.jobs.register("rollup-daily", async (job) => {
       ctx.logger.info("rollup-daily run", { runId: job.runId, trigger: job.trigger });
-      const today = fmtDay(new Date());
+      // Roll up today AND yesterday. Today handles the steady-state
+      // live-ingest top-up. Yesterday catches late-arriving events with
+      // occurred_at < today (rare but happens at midnight boundaries and
+      // when a live ingestEvent failed mid-run) and any operator
+      // correction to usage_events that doesn't touch usage_daily.
+      const now = new Date();
+      const today = fmtDay(now);
+      const yesterday = fmtDay(new Date(now.getTime() - 24 * 60 * 60 * 1000));
       const companies = await ctx.db.query<{ company_id: string }>(
-        `SELECT DISTINCT company_id FROM ${q(ctx, "usage_events")} WHERE day = $1`,
-        [today],
+        `SELECT DISTINCT company_id FROM ${q(ctx, "usage_events")} WHERE day IN ($1, $2)`,
+        [today, yesterday],
       );
       for (const c of companies) {
         await rollupCompanyDay(ctx, c.company_id, today);
+        await rollupCompanyDay(ctx, c.company_id, yesterday);
       }
     });
 
