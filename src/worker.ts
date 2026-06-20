@@ -391,32 +391,42 @@ export function priceFor(
 }
 
 async function rollupCompanyDay(ctx: PluginContext, companyId: string, day: string): Promise<void> {
-  const rows = await ctx.db.query<{
-    model: ModelKey;
-    input_tokens: number;
-    output_tokens: number;
-  }>(
-    `SELECT model,
-            SUM(input_tokens)  AS input_tokens,
-            SUM(output_tokens) AS output_tokens
+  // Atomic rebuild of usage_daily(company_id, day, *) from usage_events for
+  // the same scope. The single UPSERT statement reads + writes in one DB
+  // call, so concurrent invocations (cron vs live ingestEvent, or two live
+  // ingests on the same day) cannot interleave a stale SELECT snapshot
+  // with another writer's DELETE. PRIMARY KEY (company_id, day, model) on
+  // usage_daily makes the ON CONFLICT clause well-defined.
+  await ctx.db.execute(
+    `INSERT INTO ${q(ctx, "usage_daily")}
+       (company_id, day, model, input_tokens, output_tokens)
+     SELECT company_id,
+            day,
+            model,
+            COALESCE(SUM(input_tokens),  0) AS input_tokens,
+            COALESCE(SUM(output_tokens), 0) AS output_tokens
        FROM ${q(ctx, "usage_events")}
       WHERE company_id = $1 AND day = $2
-      GROUP BY model`,
+      GROUP BY company_id, day, model
+     ON CONFLICT (company_id, day, model) DO UPDATE
+       SET input_tokens  = EXCLUDED.input_tokens,
+           output_tokens = EXCLUDED.output_tokens`,
     [companyId, day],
   );
 
+  // Purge rolled-up rows for models that no longer have any events in this
+  // (company, day) — happens after a correction or archive cleanup. The
+  // UPSERT above can't see "removed" models on its own.
   await ctx.db.execute(
-    `DELETE FROM ${q(ctx, "usage_daily")} WHERE company_id = $1 AND day = $2`,
+    `DELETE FROM ${q(ctx, "usage_daily")}
+      WHERE company_id = $1
+        AND day        = $2
+        AND model NOT IN (
+          SELECT DISTINCT model FROM ${q(ctx, "usage_events")}
+           WHERE company_id = $1 AND day = $2
+        )`,
     [companyId, day],
   );
-
-  for (const r of rows) {
-    await ctx.db.execute(
-      `INSERT INTO ${q(ctx, "usage_daily")} (company_id, day, model, input_tokens, output_tokens)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [companyId, day, r.model, Number(r.input_tokens) || 0, Number(r.output_tokens) || 0],
-    );
-  }
 }
 
 // Backfill helper used by both backfillFromCostEvents (explicit range) and
