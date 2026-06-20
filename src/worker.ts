@@ -1390,6 +1390,11 @@ const plugin = definePlugin({
         } catch {
           /* tolerate */
         }
+        try {
+          await ctx.state.delete(pricingScope(companyId));
+        } catch {
+          /* tolerate */
+        }
         ctx.logger.info("archived company purged", {
           companyId,
           usageEvents: ev.rowCount,
