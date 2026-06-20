@@ -309,3 +309,40 @@ describe("isPlausibleFxRate", () => {
     expect(isPlausibleFxRate(null)).toBe(false);
   });
 });
+
+describe("isPricingConfig margin bounds", () => {
+  const buildConfig = (marginPercent: unknown): unknown => ({
+    pricing: Object.fromEntries(
+      PRICED_MODEL_KEYS.map((k) => [k, { input: 1, output: 2 }]),
+    ),
+    margin: { percent: marginPercent },
+  });
+
+  it("accepts margin.percent of 0", () => {
+    expect(isPricingConfig(buildConfig(0))).toBe(true);
+  });
+
+  it("accepts margin.percent of 500 (boundary)", () => {
+    expect(isPricingConfig(buildConfig(500))).toBe(true);
+  });
+
+  it("rejects margin.percent of NaN", () => {
+    expect(isPricingConfig(buildConfig(NaN))).toBe(false);
+  });
+
+  it("rejects negative margin.percent", () => {
+    expect(isPricingConfig(buildConfig(-1))).toBe(false);
+    expect(isPricingConfig(buildConfig(-50))).toBe(false);
+  });
+
+  it("rejects margin.percent above the 500 cap", () => {
+    expect(isPricingConfig(buildConfig(501))).toBe(false);
+    expect(isPricingConfig(buildConfig(1000))).toBe(false);
+    expect(isPricingConfig(buildConfig(1e308))).toBe(false);
+  });
+
+  it("rejects Infinity margin.percent", () => {
+    expect(isPricingConfig(buildConfig(Infinity))).toBe(false);
+    expect(isPricingConfig(buildConfig(-Infinity))).toBe(false);
+  });
+});

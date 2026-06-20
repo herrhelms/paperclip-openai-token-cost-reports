@@ -145,7 +145,15 @@ export function isPricingConfig(v: unknown): v is PricingConfig {
     if (!r || typeof r.input !== "number" || typeof r.output !== "number") return false;
   }
   const margin = c.margin as Record<string, unknown> | undefined;
-  if (!margin || typeof margin.percent !== "number") return false;
+  if (
+    !margin ||
+    typeof margin.percent !== "number" ||
+    !Number.isFinite(margin.percent) ||
+    margin.percent < 0 ||
+    margin.percent > 500
+  ) {
+    return false;
+  }
   return true;
 }
 
