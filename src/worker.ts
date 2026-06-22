@@ -896,6 +896,7 @@ async function buildClientMonthlyCsv(
   companyId: string,
   from: string,
   to: string,
+  unpricedMode: "skip" | "include" = "skip",
 ): Promise<{ csv: string; currency: CurrencyCode }> {
   const snapshots = await loadAllSnapshots(ctx, companyId);
   const hasPricing = snapshots.length > 0;
@@ -998,10 +999,16 @@ async function buildClientMonthlyCsv(
     const total = b.input_tokens + b.output_tokens;
     const fxRate = fxByMonth.get(b.month_end) ?? 1;
     const margin = (b.margin_percent || 0) / 100;
-    const priceNative = hasPricing
+    const snap = findActiveSnapshot(snapshots, `${b.month_end}T12:00:00Z`);
+    const rate = snap ? lookupRate(snap, b.model) : undefined;
+    // Unpriced rows (no snapshot rate for the model at month_end) are
+    // dropped by default so the client export never names a model the
+    // operator hasn't priced. `?unpriced=include` keeps the token counts
+    // with an empty price column for internal reconciliation.
+    if (!rate && unpricedMode === "skip") continue;
+    const priceNative = rate
       ? b.cost_usd * (1 + margin) * fxRate
       : null;
-    const snap = findActiveSnapshot(snapshots, `${b.month_end}T12:00:00Z`);
     const displayName = snap?.config.pricing[b.model]?.display_name ?? b.model;
     const modelLabel = displayName;
     lines.push(
@@ -2257,8 +2264,22 @@ const plugin = definePlugin({
         body: "companyId required; from + to must be YYYY-MM-DD",
       };
     }
+    const unpriced = String(
+      Array.isArray(input.query.unpriced)
+        ? input.query.unpriced[0]
+        : input.query.unpriced ?? "skip",
+    );
+    if (unpriced !== "skip" && unpriced !== "include") {
+      return {
+        status: 400,
+        headers: { "content-type": "text/plain" },
+        body: "unpriced must be 'skip' or 'include' (default skip)",
+      };
+    }
     if (!ctx) return { status: 500, body: { error: "worker not initialized" } };
-    const { csv, currency } = await buildClientMonthlyCsv(ctx, companyId, from, to);
+    const { csv, currency } = await buildClientMonthlyCsv(
+      ctx, companyId, from, to, unpriced as "skip" | "include",
+    );
     // Resolve a human-readable company slug for the filename. Falls back to
     // the company UUID if the lookup fails or the name doesn't slugify to
     // anything safe — clients shouldn't have to read UUIDs.

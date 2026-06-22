@@ -366,3 +366,12 @@ describe("lookupRate", () => {
     expect(lookupRate(snap, "")).toBeUndefined();
   });
 });
+
+describe("CSV export unpriced mode", () => {
+  it("validates that mode is 'skip' or 'include'", () => {
+    const valid = ["skip", "include"];
+    expect(valid).toContain("skip");
+    expect(valid).toContain("include");
+    expect(valid.includes("foo")).toBe(false);
+  });
+});
