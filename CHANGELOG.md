@@ -6,6 +6,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-06-22
+
+First major version. Mirror of `@herrhelms/claude-token-cost-reports@2.0.5` with all UI / save-error / multiplier-input / loading-state patches baked in from day one. Replaces the hardcoded `ModelKey` enum + single mutable pricing config with a free-form pricing matrix stored as snapshots, so operators can add any model id themselves and historical periods bill against the rates active when the tokens were burned. No code release needed when OpenAI ships a new model id.
+
+### Changed (breaking)
+- BREAKING: `PricingConfig.pricing` type changes from `Record<ModelKey, …>` (fixed 12-entry enum) to `Record<string, RateRow>` (free-form keys).
+- BREAKING: `ModelKey` type literal is removed. `usage_events.model` is now the raw payload string verbatim. Pricing lookup is exact match.
+- BREAKING: `normalizeModel`, `PRICED_MODEL_KEYS`, `MODEL_LABELS`, `CSV_MODEL_LABELS`, `LEGACY_MODEL_REMAP` removed.
+
+### Added
+- `pricing_config_history` table (migration 004). Every save appends a row keyed by `(company_id, effective_from)`. Cost computation looks up the snapshot active at each event's `occurred_at`.
+- Settings page: Add / Edit / Delete rows, optional `display_name` per row, **"Import OpenAI defaults"** button to seed the table, History panel with Revert-to-snapshot, deep-link from dashboard "no rate set" chip via URL hash.
+- Loading / Empty states on the rate table so an in-flight `getPricing` never looks like an empty save.
+- Verbose save errors: `validatePricingConfig` returns field-level messages (`"Invalid pricing config: row 'gpt-5.5': output must be >= 0 (got -5)"`); the UI extracts SDK error shapes via `extractErrorMessage` (no more `[object Object]` toasts). Inline red banner persists under the Save button until the next success.
+- Multiplier input editable freely: uses `defaultValue` + `onBlur` so partial entries like `0`, `0.`, `0.0` don't snap back to `1` between keystrokes. Values outside `(0, 1]` revert visibly on blur.
+- Dashboard: "no rate set" amber chip on per-model bars and per-agent table cells, with click-to-add-rate jump.
+- CSV export `?unpriced=skip` (default) / `?unpriced=include` query param.
+- Worker actions: `addPricingSnapshot` (explicit effective_from + note), `revertToPricingSnapshot`. `setPricing` retains its signature.
+- Worker data handler: `listPricingHistory`.
+
+### Migrated automatically (no operator action required)
+- First 2.0.0 worker boot per host: walks each company with usage_events, migrates any 1.x `pricing-config` ctx.state to a `pricing_config_history` row with `effective_from = '1970-01-01T00:00:00Z'`. Then sweeps `model='unknown'` rows to use `raw_model` verbatim. Re-rolls affected days. Sets the instance-scoped marker so subsequent boots skip.
+
+### Notable lessons baked in from the Claude rollout
+- No destructive migration 005 (Paperclip Phase 1 blocks DROP TABLE). The dead `pricing_config` table from 001_init stays as harmless dead surface.
+
 ## [1.0.2] - 2026-06-20
 ### Added
 - 6 new rows in the priced model table to cover the rest of OpenAI's published per-token list (developers.openai.com/api/docs/pricing, 2026-06-20 fetch): `gpt-5-4-pro` ($30 / $180 — same shape as `gpt-5-5-pro`), `chat-latest` ($5 / $30), `computer-use-preview` ($1.50 / $6), `o3-deep-research` ($5 / $20), `o4-mini-deep-research` ($1 / $4), `o4-mini` ($4 / $16, used as the fallback target for date-stamped fine-tuning snapshots like `o4-mini-2025-04-16`).

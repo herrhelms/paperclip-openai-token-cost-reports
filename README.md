@@ -16,7 +16,7 @@ paperclipai plugin install @herrhelms/openai-token-cost-reports
 
 # Verify the install
 paperclipai plugin list
-# expect: key=openai-token-cost-reports  status=ready  version=1.0.2  id=<uuid>
+# expect: key=openai-token-cost-reports  status=ready  version=2.0.0  id=<uuid>
 ```
 
 The host runs the plugin's database migrations automatically and registers the dashboard + settings page slots. No additional configuration is required to install — pricing and currency are set per-company in the Settings page after install.
@@ -41,7 +41,7 @@ The host runs the plugin's database migrations automatically and registers the d
 | Surface | Where to find it | What's there |
 | --- | --- | --- |
 | Dashboard | `/$COMPANY_HANDLE/monthly-report-openai` (in the company sidebar) | Usage KPIs, per-model bars, per-agent table, daily chart, monthly CSV export |
-| Settings | `/$COMPANY_HANDLE/company/settings/instance/plugins/<install-uuid>` | Per-model pricing, margin, currency, FX-rate status |
+| Settings | `/$COMPANY_HANDLE/company/settings/instance/plugins/<install-uuid>` | Free-form pricing matrix (Add / Edit / Delete rows), margin, billing currency, FX-rate status, snapshot history timeline, cost adjustment multiplier |
 
 The `<install-uuid>` is shown by `paperclipai plugin list` after install.
 
@@ -53,7 +53,7 @@ After install, open the Settings page for any company:
 
 1. **Pick a billing currency** (10 supported). The hourly FX job will fetch today's USD→target rate and store one row per `(day, currency)`.
 2. **Set a margin %** — the percentage you add on top of cost when invoicing the client.
-3. (Optional) **Adjust per-model rates.** Defaults are seeded from current OpenAI list prices for GPT-5.5, GPT-5.4, and GPT-5.3-codex families.
+3. **(Optional) Adjust per-model rates or add new model rows.** Defaults are seeded from OpenAI's published list prices for the GPT-5.4 / 5.5 family, GPT-5.3 Codex, o3 / o4 reasoning models, ChatGPT (chat-latest), and computer-use-preview. For any model id you see the host emit that's missing from the table, click "Add rate" — type the exact model string and set input/output rates. The dashboard's "no rate set" chip surfaces these in real time.
 4. **Backfill historical events.** The Settings page has a `Backfill from history` button (for the current period) and `Backfill all history` (since the company's first cost event). The plugin reads directly from the host's `public.cost_events` table via the `coreReadTables` whitelist, so historical data from before the plugin install is available immediately.
 
 Then open `/$COMPANY_HANDLE/monthly-report-openai` — the dashboard reflects the configuration within a second.
@@ -98,6 +98,25 @@ row.price    = client_price × fx_rate(month_end_day, currency)                 
 The dashboard KPI **Cost** shows `cost_usd` summed in native currency (what an API user would pay at list price). KPI **Price** shows `row.price` summed (what the client owes after margin and currency conversion). The per-model and per-agent cards show both side by side, so reconciliation is explicit.
 
 The monthly CSV emits only `row.price` — operator-internal numbers (margin %) stay off the file you send to the client.
+
+---
+
+## Cost adjustment multiplier
+
+The plugin has one knob: `effective_input_rate_multiplier`, default `1.0`
+(full list price for both input and output tokens). It applies to the
+input rate only — output stays at list.
+
+Useful when:
+
+| Scenario | Multiplier | Why |
+| --- | --- | --- |
+| Default | 1.0 | Client pays full API list price |
+| High cache-hit ratio | 0.5 | OpenAI's cached input is ~10% of standard; if half your tokens are cache hits, the effective input rate is ~0.55× — round down to 0.5 for a conservative bill |
+| Custom contract | any value in (0, 1] | Operator-specific arrangement |
+
+Switching the multiplier creates a new snapshot, so historical periods
+are unaffected.
 
 ---
 
