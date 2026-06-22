@@ -12,6 +12,7 @@ import type { PricingConfig as NewPricingConfig, PricingSnapshot } from "./prici
 import {
   validatePricingConfig,
   findActiveSnapshot,
+  lookupRate,
   DEFAULT_SEED_PRICING,
 } from "./pricing";
 
@@ -288,12 +289,17 @@ export function upgradePricingConfig(raw: unknown): PricingConfig {
   return out;
 }
 
-async function loadPricing(ctx: PluginContext, companyId: string): Promise<PricingConfig | null> {
-  const raw = await ctx.state.get(pricingScope(companyId));
-  if (raw === undefined || raw === null) return null;
-  // Accept both the current shape and the pre-0.2.0 shape via the upgrade path.
-  if (isPricingConfig(raw)) return raw;
-  return upgradePricingConfig(raw);
+// Resolves a single active snapshot at `occurredAt`. Callers wanting the
+// "current" config pass `new Date().toISOString()`. All five cost-
+// computation handlers below use loadAllSnapshots + findActiveSnapshot
+// directly instead, so they can reuse the snapshot list per-row without
+// re-querying. Exposed for tests and external callers.
+export async function loadPricing(
+  ctx: PluginContext,
+  companyId: string,
+  occurredAt: string,
+): Promise<NewPricingConfig | null> {
+  return loadActiveConfig(ctx, companyId, occurredAt);
 }
 
 // ---- Currency + FX -------------------------------------------------------
@@ -546,15 +552,18 @@ async function ensureTodaysFxRates(ctx: PluginContext): Promise<{
 }
 
 export function priceFor(
-  model: ModelKey,
+  rawModel: string,
   input: number,
   output: number,
-  cfg: PricingConfig,
+  cfg: NewPricingConfig,
 ): { inputCost: number; outputCost: number } {
-  if (model === "unknown") return { inputCost: 0, outputCost: 0 };
-  const rate = cfg.pricing[model];
+  const rate = lookupRate(
+    { effective_from: "", config: cfg },
+    rawModel,
+  );
   if (!rate) return { inputCost: 0, outputCost: 0 };
-  const inputCost = (input / 1_000_000) * rate.input;
+  const mult = cfg.effective_input_rate_multiplier ?? 1;
+  const inputCost = (input / 1_000_000) * rate.input * mult;
   const outputCost = (output / 1_000_000) * rate.output;
   return { inputCost, outputCost };
 }
@@ -821,7 +830,7 @@ async function ingestEvent(ctx: PluginContext, event: PluginEvent): Promise<void
 
 function buildMonthlyRows(
   daily: DailyRow[],
-  pricing: PricingConfig | null,
+  snapshots: PricingSnapshot[],
 ): Array<{
   month: string;
   month_start: string;
@@ -832,6 +841,7 @@ function buildMonthlyRows(
   output_cost_usd: number | null;
   total_billed_usd: number | null;
 }> {
+  const hasPricing = snapshots.length > 0;
   const buckets = new Map<
     string,
     {
@@ -842,6 +852,9 @@ function buildMonthlyRows(
       output_tokens: number;
       input_cost_usd: number;
       output_cost_usd: number;
+      // Track per-bucket margin (USD) so multi-snapshot months use the
+      // snapshot active at the bucket's month_end for the margin pass.
+      margin_percent: number;
     }
   >();
 
@@ -850,47 +863,53 @@ function buildMonthlyRows(
     const key = monthKey(start);
     let bucket = buckets.get(key);
     if (!bucket) {
+      const monthEndDay = fmtDay(monthEnd(start));
+      const snap = findActiveSnapshot(snapshots, `${monthEndDay}T12:00:00Z`);
       bucket = {
         month: key,
         month_start: fmtDay(start),
-        month_end: fmtDay(monthEnd(start)),
+        month_end: monthEndDay,
         input_tokens: 0,
         output_tokens: 0,
         input_cost_usd: 0,
         output_cost_usd: 0,
+        margin_percent: snap?.config.margin.percent ?? 0,
       };
       buckets.set(key, bucket);
     }
     bucket.input_tokens += Number(row.input_tokens) || 0;
     bucket.output_tokens += Number(row.output_tokens) || 0;
-    if (pricing) {
+    const snap = findActiveSnapshot(snapshots, `${row.day}T12:00:00Z`);
+    const cfg = snap?.config ?? null;
+    if (cfg) {
       const { inputCost, outputCost } = priceFor(
         row.model,
         Number(row.input_tokens) || 0,
         Number(row.output_tokens) || 0,
-        pricing,
+        cfg,
       );
       bucket.input_cost_usd += inputCost;
       bucket.output_cost_usd += outputCost;
     }
   }
 
-  const marginMultiplier = pricing ? 1 + (pricing.margin.percent || 0) / 100 : 1;
-
   return Array.from(buckets.values())
     .sort((a, b) => a.month.localeCompare(b.month))
-    .map((b) => ({
-      month: b.month,
-      month_start: b.month_start,
-      month_end: b.month_end,
-      input_tokens: b.input_tokens,
-      output_tokens: b.output_tokens,
-      input_cost_usd: pricing ? Number(b.input_cost_usd.toFixed(4)) : null,
-      output_cost_usd: pricing ? Number(b.output_cost_usd.toFixed(4)) : null,
-      total_billed_usd: pricing
-        ? Number(((b.input_cost_usd + b.output_cost_usd) * marginMultiplier).toFixed(4))
-        : null,
-    }));
+    .map((b) => {
+      const marginMultiplier = 1 + (b.margin_percent || 0) / 100;
+      return {
+        month: b.month,
+        month_start: b.month_start,
+        month_end: b.month_end,
+        input_tokens: b.input_tokens,
+        output_tokens: b.output_tokens,
+        input_cost_usd: hasPricing ? Number(b.input_cost_usd.toFixed(4)) : null,
+        output_cost_usd: hasPricing ? Number(b.output_cost_usd.toFixed(4)) : null,
+        total_billed_usd: hasPricing
+          ? Number(((b.input_cost_usd + b.output_cost_usd) * marginMultiplier).toFixed(4))
+          : null,
+      };
+    });
 }
 
 async function readDaily(
@@ -952,13 +971,15 @@ async function buildClientMonthlyCsv(
   from: string,
   to: string,
 ): Promise<{ csv: string; currency: CurrencyCode }> {
-  const pricing = await loadPricing(ctx, companyId);
+  const snapshots = await loadAllSnapshots(ctx, companyId);
+  const hasPricing = snapshots.length > 0;
   const currencyCfg = await loadCurrency(ctx, companyId);
-  const margin = pricing ? (pricing.margin.percent || 0) / 100 : 0;
   const daily = await readDaily(ctx, companyId, from, to);
 
   // Group by (month YYYY-MM, model). Track tokens here; price is computed
-  // once per row after we know the right FX rate for that month.
+  // once per row after we know the right FX rate for that month. Per-row
+  // snapshot resolution means historical periods bill against their own
+  // contemporary snapshots.
   type Bucket = {
     month: string;
     month_start: string;
@@ -967,6 +988,9 @@ async function buildClientMonthlyCsv(
     input_tokens: number;
     output_tokens: number;
     cost_usd: number;
+    // Margin captured at month_end snapshot — applied uniformly to the
+    // whole month's cost when emitting the line.
+    margin_percent: number;
   };
   const buckets = new Map<string, Bucket>();
 
@@ -976,14 +1000,17 @@ async function buildClientMonthlyCsv(
     const key = `${monthLabel}|${row.model}`;
     let bucket = buckets.get(key);
     if (!bucket) {
+      const monthEndDay = fmtDay(monthEnd(start));
+      const monthSnap = findActiveSnapshot(snapshots, `${monthEndDay}T12:00:00Z`);
       bucket = {
         month: monthLabel,
         month_start: fmtDay(start),
-        month_end: fmtDay(monthEnd(start)),
+        month_end: monthEndDay,
         model: row.model,
         input_tokens: 0,
         output_tokens: 0,
         cost_usd: 0,
+        margin_percent: monthSnap?.config.margin.percent ?? 0,
       };
       buckets.set(key, bucket);
     }
@@ -991,8 +1018,10 @@ async function buildClientMonthlyCsv(
     const out = Number(row.output_tokens) || 0;
     bucket.input_tokens += inp;
     bucket.output_tokens += out;
-    if (pricing) {
-      const { inputCost, outputCost } = priceFor(row.model, inp, out, pricing);
+    const snap = findActiveSnapshot(snapshots, `${row.day}T12:00:00Z`);
+    const cfg = snap?.config ?? null;
+    if (cfg) {
+      const { inputCost, outputCost } = priceFor(row.model, inp, out, cfg);
       bucket.cost_usd += inputCost + outputCost;
     }
   }
@@ -1042,7 +1071,8 @@ async function buildClientMonthlyCsv(
   for (const b of rows) {
     const total = b.input_tokens + b.output_tokens;
     const fxRate = fxByMonth.get(b.month_end) ?? 1;
-    const priceNative = pricing
+    const margin = (b.margin_percent || 0) / 100;
+    const priceNative = hasPricing
       ? b.cost_usd * (1 + margin) * fxRate
       : null;
     const modelLabel = CSV_MODEL_LABELS[b.model] ?? b.model;
@@ -1069,7 +1099,7 @@ async function buildClientMonthlyCsv(
           input_tokens: 0,
           output_tokens: 0,
           total_tokens: 0,
-          price: pricing ? 0 : null,
+          price: hasPricing ? 0 : null,
         };
         subtotalByMonth.set(b.month, s);
       }
@@ -1191,15 +1221,15 @@ interface CostsOverview {
 }
 
 function priceTokens(
-  normalizedKey: ModelKey,
+  rawModel: string,
   input: number,
   output: number,
-  pricing: PricingConfig | null,
+  cfg: NewPricingConfig | null,
 ): number | null {
-  if (!pricing) return null;
-  const { inputCost, outputCost } = priceFor(normalizedKey, input, output, pricing);
+  if (!cfg) return null;
+  const { inputCost, outputCost } = priceFor(rawModel, input, output, cfg);
   const total = inputCost + outputCost;
-  const marginMultiplier = 1 + (pricing.margin.percent || 0) / 100;
+  const marginMultiplier = 1 + (cfg.margin.percent || 0) / 100;
   return Number((total * marginMultiplier).toFixed(4));
 }
 
@@ -1207,7 +1237,8 @@ async function buildCostsOverview(
   ctx: PluginContext,
   companyId: string,
 ): Promise<CostsOverview> {
-  const pricing = await loadPricing(ctx, companyId);
+  const snapshots = await loadAllSnapshots(ctx, companyId);
+  const hasPricing = snapshots.length > 0;
   // Use the longest window as the read horizon so a single query feeds every bucket.
   const horizonMs = ROLLING_WINDOWS[ROLLING_WINDOWS.length - 1].ms;
   const now = new Date();
@@ -1245,7 +1276,9 @@ async function buildCostsOverview(
       const inp = Number(e.input_tokens) || 0;
       const out = Number(e.output_tokens) || 0;
       tokens += inp + out;
-      const priced = priceTokens(e.model, inp, out, pricing);
+      const snap = findActiveSnapshot(snapshots, e.occurred_at);
+      const cfg = snap?.config ?? null;
+      const priced = priceTokens(e.model, inp, out, cfg);
       if (priced !== null) {
         costUsd += priced;
         hasCost = true;
@@ -1278,6 +1311,8 @@ async function buildCostsOverview(
   const subscriptionShare = totalTokens > 0 ? subTokens / totalTokens : 0;
 
   // Per-model breakdown — group by raw_model (with [1m] suffix preserved).
+  // Cost is accumulated per-event so each event uses its own active snapshot;
+  // historical periods bill against their contemporary snapshot.
   const perModelMap = new Map<
     string,
     {
@@ -1288,6 +1323,8 @@ async function buildCostsOverview(
       tokens: number;
       input: number;
       output: number;
+      costAccumUsd: number;
+      hasCost: boolean;
     }
   >();
   for (const e of events) {
@@ -1305,6 +1342,8 @@ async function buildCostsOverview(
         tokens: 0,
         input: 0,
         output: 0,
+        costAccumUsd: 0,
+        hasCost: false,
       };
       perModelMap.set(key, bucket);
     }
@@ -1313,6 +1352,13 @@ async function buildCostsOverview(
     bucket.input += inp;
     bucket.output += out;
     bucket.tokens += inp + out;
+    const snap = findActiveSnapshot(snapshots, e.occurred_at);
+    const cfg = snap?.config ?? null;
+    const priced = priceTokens(e.model, inp, out, cfg);
+    if (priced !== null) {
+      bucket.costAccumUsd += priced;
+      bucket.hasCost = true;
+    }
   }
   const perModelRaw = Array.from(perModelMap.values()).sort((a, b) => b.tokens - a.tokens);
   const grandTokens = perModelRaw.reduce((sum, r) => sum + r.tokens, 0);
@@ -1323,7 +1369,7 @@ async function buildCostsOverview(
     source: r.source,
     tokens: r.tokens,
     tokenShare: grandTokens > 0 ? r.tokens / grandTokens : 0,
-    costUsd: priceTokens(r.normalizedKey, r.input, r.output, pricing),
+    costUsd: r.hasCost ? Number(r.costAccumUsd.toFixed(4)) : null,
   }));
 
   // ---------- Per-agent breakdown (mirrors host /costs "What each agent consumed") ----------
@@ -1346,6 +1392,8 @@ async function buildCostsOverview(
       tokens: number;
       input: number;
       output: number;
+      costAccumUsd: number;
+      hasCost: boolean;
     }>;
   };
   const perAgentMap = new Map<string, AgentBucket>();
@@ -1375,7 +1423,9 @@ async function buildCostsOverview(
     agent.totalTokens += inp + out;
     if (src === "subscription") agent.subscriptionRuns++;
     else agent.apiRuns++;
-    const priced = priceTokens(e.model, inp, out, pricing);
+    const snap = findActiveSnapshot(snapshots, e.occurred_at);
+    const cfg = snap?.config ?? null;
+    const priced = priceTokens(e.model, inp, out, cfg);
     if (priced !== null) {
       agent.costAccumUsd += priced;
       agent.hasCost = true;
@@ -1393,12 +1443,18 @@ async function buildCostsOverview(
         tokens: 0,
         input: 0,
         output: 0,
+        costAccumUsd: 0,
+        hasCost: false,
       };
       agent.models.set(modelKey, m);
     }
     m.input += inp;
     m.output += out;
     m.tokens += inp + out;
+    if (priced !== null) {
+      m.costAccumUsd += priced;
+      m.hasCost = true;
+    }
   }
 
   // Resolve agent_id → display name. Single ctx.agents.list call covers the whole company.
@@ -1432,7 +1488,7 @@ async function buildCostsOverview(
           inputTokens: m.input,
           outputTokens: m.output,
           agentTokenShare: a.totalTokens > 0 ? m.tokens / a.totalTokens : 0,
-          costUsd: priceTokens(m.normalizedKey, m.input, m.output, pricing),
+          costUsd: m.hasCost ? Number(m.costAccumUsd.toFixed(4)) : null,
         }));
       return {
         agentId: a.agentId,
@@ -1463,7 +1519,7 @@ async function buildCostsOverview(
     },
     perModel,
     perAgent,
-    priced: !!pricing,
+    priced: hasPricing,
     quotaNote:
       "Claude CLI subscription quota windows (Current session / Current week) are host-local — not exposed via the cost_event.created bus, so this card omits them.",
   };
@@ -1588,11 +1644,15 @@ const plugin = definePlugin({
       const to = String(params.to ?? "");
       if (!companyId || !from || !to) throw new Error("companyId, from, to are required");
 
-      const pricing = await loadPricing(ctx, companyId);
+      const snapshots = await loadAllSnapshots(ctx, companyId);
+      const hasPricing = snapshots.length > 0;
       const currencyCfg = await loadCurrency(ctx, companyId);
       const fx = await getFxRate(ctx, to, currencyCfg.currency);
       const fxRate = fx?.rate ?? 1;
-      const margin = pricing ? (pricing.margin.percent || 0) / 100 : 0;
+      // Surface the most-recent snapshot's margin as the "current"
+      // marginPercent for the response — UIs use it for the chip; per-row
+      // costs apply the per-day margin themselves.
+      const latestCfg = snapshots[0]?.config ?? null;
       const rows = await readDaily(ctx, companyId, from, to);
 
       const byDay = new Map<string, {
@@ -1600,38 +1660,48 @@ const plugin = definePlugin({
         input_tokens: number;
         output_tokens: number;
         cost_usd: number;
+        margin_percent: number;
       }>();
 
       for (const r of rows) {
         let bucket = byDay.get(r.day);
+        const snap = findActiveSnapshot(snapshots, `${r.day}T12:00:00Z`);
+        const cfg = snap?.config ?? null;
         if (!bucket) {
-          bucket = { day: r.day, input_tokens: 0, output_tokens: 0, cost_usd: 0 };
+          bucket = {
+            day: r.day,
+            input_tokens: 0,
+            output_tokens: 0,
+            cost_usd: 0,
+            margin_percent: cfg?.margin.percent ?? 0,
+          };
           byDay.set(r.day, bucket);
         }
         bucket.input_tokens += Number(r.input_tokens) || 0;
         bucket.output_tokens += Number(r.output_tokens) || 0;
-        if (pricing) {
+        if (cfg) {
           const { inputCost, outputCost } = priceFor(
             r.model,
             Number(r.input_tokens) || 0,
             Number(r.output_tokens) || 0,
-            pricing,
+            cfg,
           );
           bucket.cost_usd += inputCost + outputCost;
         }
       }
 
       return {
-        priced: !!pricing,
+        priced: hasPricing,
         currency: currencyCfg.currency,
         fxRate,
         fxDay: fx?.day ?? null,
         fxSource: fx?.source ?? null,
-        marginPercent: pricing?.margin.percent ?? 0,
+        marginPercent: latestCfg?.margin.percent ?? 0,
         rows: Array.from(byDay.values())
           .sort((a, b) => b.day.localeCompare(a.day))
           .map((r) => {
-            const cost_usd = pricing ? r.cost_usd : null;
+            const margin = (r.margin_percent || 0) / 100;
+            const cost_usd = hasPricing ? r.cost_usd : null;
             const price_usd =
               cost_usd === null ? null : cost_usd * (1 + margin);
             const cost_native =
@@ -1665,11 +1735,11 @@ const plugin = definePlugin({
       const from = String(params.from ?? "");
       const to = String(params.to ?? "");
       if (!companyId || !from || !to) throw new Error("companyId, from, to are required");
-      const pricing = await loadPricing(ctx, companyId);
+      const snapshots = await loadAllSnapshots(ctx, companyId);
       const daily = await readDaily(ctx, companyId, from, to);
       return {
-        priced: !!pricing,
-        rows: buildMonthlyRows(daily, pricing),
+        priced: snapshots.length > 0,
+        rows: buildMonthlyRows(daily, snapshots),
       };
     });
 
@@ -1682,12 +1752,20 @@ const plugin = definePlugin({
       const from = String(params.from ?? "");
       const to = String(params.to ?? "");
       if (!companyId || !from || !to) throw new Error("companyId, from, to are required");
-      const pricing = await loadPricing(ctx, companyId);
+      const snapshots = await loadAllSnapshots(ctx, companyId);
+      const hasPricing = snapshots.length > 0;
+      const latestCfg = snapshots[0]?.config ?? null;
       const currencyCfg = await loadCurrency(ctx, companyId);
       const fx = await getFxRate(ctx, to, currencyCfg.currency);
       const fxRate = fx?.rate ?? 1;
-      const margin = pricing ? (pricing.margin.percent || 0) / 100 : 0;
       const daily = await readDaily(ctx, companyId, from, to);
+
+      // Margin for the period: use the snapshot active at `to` so the
+      // displayed marginPercent matches the chargeback applied to the
+      // per-model totals. Per-day costs already used the per-day snapshot
+      // when accumulating; this margin reads the period-end policy.
+      const periodEndSnap = findActiveSnapshot(snapshots, `${to}T12:00:00Z`);
+      const margin = (periodEndSnap?.config.margin.percent ?? 0) / 100;
 
       const byModel = new Map<
         ModelKey,
@@ -1708,15 +1786,17 @@ const plugin = definePlugin({
         }
         bucket.input_tokens += inp;
         bucket.output_tokens += out;
-        if (pricing) {
-          const { inputCost, outputCost } = priceFor(r.model, inp, out, pricing);
+        const snap = findActiveSnapshot(snapshots, `${r.day}T12:00:00Z`);
+        const cfg = snap?.config ?? null;
+        if (cfg) {
+          const { inputCost, outputCost } = priceFor(r.model, inp, out, cfg);
           bucket.cost_usd += inputCost + outputCost;
         }
       }
 
       const rows = Array.from(byModel.entries())
         .map(([model, b]) => {
-          const cost_usd = pricing ? b.cost_usd : null;
+          const cost_usd = hasPricing ? b.cost_usd : null;
           const price_usd =
             cost_usd === null ? null : cost_usd * (1 + margin);
           const cost_native = cost_usd === null ? null : cost_usd * fxRate;
@@ -1744,12 +1824,12 @@ const plugin = definePlugin({
         .sort((a, b) => b.total_tokens - a.total_tokens);
 
       return {
-        priced: !!pricing,
+        priced: hasPricing,
         currency: currencyCfg.currency,
         fxRate,
         fxDay: fx?.day ?? null,
         fxSource: fx?.source ?? null,
-        marginPercent: pricing?.margin.percent ?? 0,
+        marginPercent: latestCfg?.margin.percent ?? 0,
         rows,
       };
     });
@@ -1957,25 +2037,32 @@ const plugin = definePlugin({
       const to = String(params.to ?? "");
       if (!companyId || !from || !to) throw new Error("companyId, from, to are required");
 
-      const pricing = await loadPricing(ctx, companyId);
+      const snapshots = await loadAllSnapshots(ctx, companyId);
+      const hasPricing = snapshots.length > 0;
+      const latestCfg = snapshots[0]?.config ?? null;
       const currencyCfg = await loadCurrency(ctx, companyId);
       const fx = await getFxRate(ctx, to, currencyCfg.currency);
 
+      // Widen GROUP BY to include `day` so each row resolves to its own
+      // per-day snapshot during in-memory pricing. The reduction back to
+      // (agent_id, model) happens below after costs are accumulated.
       const rows = await ctx.db.query<{
         agent_id: string | null;
         model: ModelKey;
+        day: string;
         runs: number | string;
         input_tokens: number | string;
         output_tokens: number | string;
       }>(
         `SELECT agent_id,
                 model,
+                day,
                 COUNT(*)            AS runs,
                 SUM(input_tokens)   AS input_tokens,
                 SUM(output_tokens)  AS output_tokens
            FROM ${q(ctx, "usage_events")}
           WHERE company_id = $1 AND day >= $2 AND day <= $3
-          GROUP BY agent_id, model`,
+          GROUP BY agent_id, model, day`,
         [companyId, from, to],
       );
 
@@ -1996,7 +2083,6 @@ const plugin = definePlugin({
         });
       }
 
-      const margin = pricing ? (pricing.margin.percent || 0) / 100 : 0;
       const fxRate = fx?.rate ?? 1;
 
       type ModelLine = {
@@ -2012,7 +2098,10 @@ const plugin = definePlugin({
       type AgentBlock = {
         agentId: string | null;
         agentName: string;
-        models: ModelLine[];
+        // Per-(agent, model) accumulator. We hold a Map during the loop so
+        // multiple per-day rows for the same model merge in-place; the final
+        // shape exposes `models` as an array.
+        modelMap: Map<ModelKey, ModelLine>;
         totals: {
           runs: number;
           input_tokens: number;
@@ -2030,15 +2119,22 @@ const plugin = definePlugin({
         const inp = Number(r.input_tokens) || 0;
         const out = Number(r.output_tokens) || 0;
         const runs = Number(r.runs) || 0;
-        const { inputCost, outputCost } = pricing
-          ? priceFor(r.model, inp, out, pricing)
+        const snap = findActiveSnapshot(snapshots, `${r.day}T12:00:00Z`);
+        const cfg = snap?.config ?? null;
+        const { inputCost, outputCost } = cfg
+          ? priceFor(r.model, inp, out, cfg)
           : { inputCost: 0, outputCost: 0 };
         // cost_usd / cost_native = raw list-price equivalent in USD / display currency.
-        // price_usd / price_native = chargeback after margin.
-        const cost_usd = pricing ? inputCost + outputCost : null;
-        const price_usd = cost_usd === null ? null : cost_usd * (1 + margin);
-        const cost_native = cost_usd === null ? null : cost_usd * fxRate;
-        const price_native = price_usd === null ? null : price_usd * fxRate;
+        // price_usd / price_native = chargeback after margin (margin is per-day
+        // because the operator can shift it via a snapshot mid-period).
+        const dayMargin = cfg ? (cfg.margin.percent || 0) / 100 : 0;
+        const row_cost_usd = cfg ? inputCost + outputCost : null;
+        const row_price_usd =
+          row_cost_usd === null ? null : row_cost_usd * (1 + dayMargin);
+        const row_cost_native =
+          row_cost_usd === null ? null : row_cost_usd * fxRate;
+        const row_price_native =
+          row_price_usd === null ? null : row_price_usd * fxRate;
 
         const agentId = r.agent_id;
         const key = agentId ?? "__unattributed__";
@@ -2049,46 +2145,62 @@ const plugin = definePlugin({
             agentName:
               (agentId && nameByAgent.get(agentId)) ||
               (agentId ? agentId.slice(0, 8) : "Unattributed"),
-            models: [],
+            modelMap: new Map(),
             totals: {
               runs: 0,
               input_tokens: 0,
               output_tokens: 0,
-              cost_usd: pricing ? 0 : null,
-              price_usd: pricing ? 0 : null,
-              cost_native: pricing ? 0 : null,
-              price_native: pricing ? 0 : null,
+              cost_usd: hasPricing ? 0 : null,
+              price_usd: hasPricing ? 0 : null,
+              cost_native: hasPricing ? 0 : null,
+              price_native: hasPricing ? 0 : null,
             },
           };
           byAgent.set(key, block);
         }
-        block.models.push({
-          model: r.model,
-          runs,
-          input_tokens: inp,
-          output_tokens: out,
-          cost_usd,
-          price_usd,
-          cost_native,
-          price_native,
-        });
+        let line = block.modelMap.get(r.model);
+        if (!line) {
+          line = {
+            model: r.model,
+            runs: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            cost_usd: hasPricing ? 0 : null,
+            price_usd: hasPricing ? 0 : null,
+            cost_native: hasPricing ? 0 : null,
+            price_native: hasPricing ? 0 : null,
+          };
+          block.modelMap.set(r.model, line);
+        }
+        line.runs += runs;
+        line.input_tokens += inp;
+        line.output_tokens += out;
+        if (hasPricing && row_cost_usd !== null && row_price_usd !== null) {
+          line.cost_usd = (line.cost_usd ?? 0) + row_cost_usd;
+          line.price_usd = (line.price_usd ?? 0) + row_price_usd;
+          line.cost_native = (line.cost_native ?? 0) + (row_cost_native ?? 0);
+          line.price_native =
+            (line.price_native ?? 0) + (row_price_native ?? 0);
+        }
         block.totals.runs += runs;
         block.totals.input_tokens += inp;
         block.totals.output_tokens += out;
-        if (pricing && cost_usd !== null && price_usd !== null) {
-          block.totals.cost_usd = (block.totals.cost_usd ?? 0) + cost_usd;
-          block.totals.price_usd = (block.totals.price_usd ?? 0) + price_usd;
+        if (hasPricing && row_cost_usd !== null && row_price_usd !== null) {
+          block.totals.cost_usd = (block.totals.cost_usd ?? 0) + row_cost_usd;
+          block.totals.price_usd =
+            (block.totals.price_usd ?? 0) + row_price_usd;
           block.totals.cost_native =
-            (block.totals.cost_native ?? 0) + (cost_native ?? 0);
+            (block.totals.cost_native ?? 0) + (row_cost_native ?? 0);
           block.totals.price_native =
-            (block.totals.price_native ?? 0) + (price_native ?? 0);
+            (block.totals.price_native ?? 0) + (row_price_native ?? 0);
         }
       }
 
       // Round and sort once everything's accumulated.
       const result = Array.from(byAgent.values()).map((block) => ({
-        ...block,
-        models: block.models
+        agentId: block.agentId,
+        agentName: block.agentName,
+        models: Array.from(block.modelMap.values())
           .map((m) => ({
             ...m,
             cost_usd: m.cost_usd === null ? null : Number(m.cost_usd.toFixed(4)),
@@ -2130,12 +2242,12 @@ const plugin = definePlugin({
       );
 
       return {
-        priced: !!pricing,
+        priced: hasPricing,
         currency: currencyCfg.currency,
         fxRate: fxRate,
         fxDay: fx?.day ?? null,
         fxSource: fx?.source ?? null,
-        marginPercent: pricing?.margin.percent ?? 0,
+        marginPercent: latestCfg?.margin.percent ?? 0,
         rows: result,
       };
     });
