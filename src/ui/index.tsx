@@ -607,6 +607,21 @@ const styles = {
     fontSize: 12,
     color: "var(--muted-foreground)",
   } as React.CSSProperties,
+  noRateChip: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "2px 8px",
+    borderLeft: "3px solid #d97706",
+    background: "rgba(217, 119, 6, 0.08)",
+    borderRadius: 4,
+    fontSize: 12,
+  } as React.CSSProperties,
+  noRateLink: {
+    color: "#d97706",
+    textDecoration: "underline",
+    cursor: "pointer",
+  } as React.CSSProperties,
 };
 
 function ThemeStyles(): JSX.Element {
@@ -1001,6 +1016,7 @@ function PerModelCard(props: {
   priced: boolean;
   currency: CurrencyCode;
   settingsLinkProps: SettingsLinkProps;
+  settingsHref: string;
   pricingConfig: PricingConfig | null;
 }) {
   if (props.loading) {
@@ -1063,12 +1079,31 @@ function PerModelCard(props: {
               </div>
               <div style={styles.modelNums}>
                 {fmtTokens(r.total_tokens)} tok
-                {props.priced && r.price_native !== null
-                  ? ` · ${fmtMoney(r.cost_native, props.currency)} → ${fmtMoney(
+                {props.priced ? (
+                  r.cost_usd === null ? (
+                    <>
+                      {" · "}
+                      <span style={styles.noRateChip}>
+                        no rate set
+                        <a
+                          href={settingsUrlForAddRate(r.model, props.settingsHref)}
+                          style={styles.noRateLink}
+                        >
+                          add rate →
+                        </a>
+                      </span>
+                    </>
+                  ) : r.price_native !== null ? (
+                    ` · ${fmtMoney(r.cost_native, props.currency)} → ${fmtMoney(
                       r.price_native,
                       props.currency,
                     )}`
-                  : ""}
+                  ) : (
+                    ""
+                  )
+                ) : (
+                  ""
+                )}
               </div>
             </div>
           );
@@ -1090,6 +1125,7 @@ function PerAgentCard(props: {
   loading: boolean;
   data: PerAgentResponse | null;
   settingsLinkProps: SettingsLinkProps;
+  settingsHref: string;
   pricingConfig: PricingConfig | null;
 }) {
   if (props.loading) {
@@ -1219,12 +1255,36 @@ function PerAgentCard(props: {
                     <td style={subRowCell}>{fmtTokens(m.output_tokens)}</td>
                     {priced && (
                       <td style={subRowCell}>
-                        {fmtMoney(m.cost_native, currency)}
+                        {m.cost_usd === null ? (
+                          <span style={styles.noRateChip}>
+                            no rate set
+                            <a
+                              href={settingsUrlForAddRate(m.model, props.settingsHref)}
+                              style={styles.noRateLink}
+                            >
+                              add rate →
+                            </a>
+                          </span>
+                        ) : (
+                          fmtMoney(m.cost_native, currency)
+                        )}
                       </td>
                     )}
                     {priced && (
                       <td style={subRowCell}>
-                        {fmtMoney(m.price_native, currency)}
+                        {m.cost_usd === null ? (
+                          <span style={styles.noRateChip}>
+                            no rate set
+                            <a
+                              href={settingsUrlForAddRate(m.model, props.settingsHref)}
+                              style={styles.noRateLink}
+                            >
+                              add rate →
+                            </a>
+                          </span>
+                        ) : (
+                          fmtMoney(m.price_native, currency)
+                        )}
                       </td>
                     )}
                   </tr>
@@ -1419,6 +1479,10 @@ function DailyChartCard(props: {
       </div>
     </section>
   );
+}
+
+function settingsUrlForAddRate(modelKey: string, settingsHref: string): string {
+  return `${settingsHref}#add-${encodeURIComponent(modelKey)}`;
 }
 
 export function UsagePage(): JSX.Element {
@@ -1856,6 +1920,7 @@ export function UsagePage(): JSX.Element {
         priced={!!perModel.data?.priced}
         currency={currency}
         settingsLinkProps={settingsLinkProps}
+        settingsHref={settingsHref}
         pricingConfig={pricingConfig}
       />
 
@@ -1864,6 +1929,7 @@ export function UsagePage(): JSX.Element {
         loading={perAgent.loading}
         data={perAgent.data ?? null}
         settingsLinkProps={settingsLinkProps}
+        settingsHref={settingsHref}
         pricingConfig={pricingConfig}
       />
 
@@ -2009,6 +2075,26 @@ export function SettingsPage(): JSX.Element {
     const normalized = normalizePricing(pricing.data);
     if (normalized) setConfig(normalized);
   }, [pricing.data]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const hash = window.location.hash;
+    const m = hash.match(/^#add-(.+)$/);
+    if (!m) return;
+    const key = decodeURIComponent(m[1]);
+    const tid = window.setTimeout(() => {
+      const form = document.querySelector<HTMLFormElement>("form[data-add-rate]");
+      if (form) {
+        form.scrollIntoView({ behavior: "smooth" });
+        const keyInput = form.querySelector<HTMLInputElement>('input[name="key"]');
+        if (keyInput) {
+          keyInput.value = key;
+          keyInput.focus();
+        }
+      }
+    }, 50);
+    return () => window.clearTimeout(tid);
+  }, []);
 
   const save = async () => {
     setSaving(true);
