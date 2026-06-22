@@ -6,6 +6,7 @@ import {
   usePluginAction,
   usePluginToast,
 } from "@paperclipai/plugin-sdk/ui";
+import { DEFAULT_SEED_PRICING } from "../pricing";
 
 // Host paths for the two surfaces this plugin contributes.
 //
@@ -121,96 +122,110 @@ type DailyRow = {
   billable_usd?: number | null;
 };
 
-// Model keys mirror the worker's PRICED_MODEL_KEYS. Keep in sync.
-type ModelKey =
-  | "gpt-5-5"
-  | "gpt-5-5-pro"
-  | "gpt-5-4"
-  | "gpt-5-4-mini"
-  | "gpt-5-4-nano"
-  | "gpt-5-4-pro"
-  | "gpt-5-3-codex"
-  | "chat-latest"
-  | "computer-use-preview"
-  | "o3-deep-research"
-  | "o4-mini-deep-research"
-  | "o4-mini";
-
-const PRICED_MODEL_KEYS: ReadonlyArray<ModelKey> = [
-  "gpt-5-5",
-  "gpt-5-5-pro",
-  "gpt-5-4",
-  "gpt-5-4-mini",
-  "gpt-5-4-nano",
-  "gpt-5-4-pro",
-  "gpt-5-3-codex",
-  "chat-latest",
-  "computer-use-preview",
-  "o3-deep-research",
-  "o4-mini-deep-research",
-  "o4-mini",
-];
-
+// Free-form rate table. Keys are any operator-supplied strings (raw OpenAI
+// model identifiers like "gpt-5.5" or "o4-mini"). The worker's PricingConfig
+// shape is mirrored here; we import DEFAULT_SEED_PRICING from ../pricing
+// to share the seed table between worker and UI.
+type RateRow = { input: number; output: number; display_name?: string };
 type PricingConfig = {
-  pricing: Record<ModelKey, { input: number; output: number }>;
+  pricing: Record<string, RateRow>;
   margin: { percent: number };
+  effective_input_rate_multiplier?: number;
 };
 
-// Defaults match the current public OpenAI API list prices from
-// https://platform.openai.com/docs/pricing. Override any row in settings.
-// Rates from https://developers.openai.com/api/docs/pricing, 2026-06-20 fetch.
-const DEFAULT_PRICING: PricingConfig = {
-  pricing: {
-    "gpt-5-5":               { input: 5.00,  output: 30.00 },
-    "gpt-5-5-pro":           { input: 30.00, output: 180.00 },
-    "gpt-5-4":               { input: 2.50,  output: 15.00 },
-    "gpt-5-4-mini":          { input: 0.75,  output: 4.50 },
-    "gpt-5-4-nano":          { input: 0.20,  output: 1.25 },
-    "gpt-5-4-pro":           { input: 30.00, output: 180.00 },
-    "gpt-5-3-codex":         { input: 1.75,  output: 14.00 },
-    "chat-latest":           { input: 5.00,  output: 30.00 },
-    "computer-use-preview":  { input: 1.50,  output: 6.00 },
-    "o3-deep-research":      { input: 5.00,  output: 20.00 },
-    "o4-mini-deep-research": { input: 1.00,  output: 4.00 },
-    "o4-mini":               { input: 4.00,  output: 16.00 },
-  },
-  margin: { percent: 0 },
-};
-
-// Display labels for the settings table.
-const MODEL_LABELS: Record<ModelKey, string> = {
-  "gpt-5-5":               "GPT-5.5",
-  "gpt-5-5-pro":           "GPT-5.5 Pro",
-  "gpt-5-4":               "GPT-5.4",
-  "gpt-5-4-mini":          "GPT-5.4 Mini",
-  "gpt-5-4-nano":          "GPT-5.4 Nano",
-  "gpt-5-4-pro":           "GPT-5.4 Pro",
-  "gpt-5-3-codex":         "GPT-5.3 Codex",
-  "chat-latest":           "ChatGPT (chat-latest)",
-  "computer-use-preview":  "Computer Use Preview",
-  "o3-deep-research":      "o3 Deep Research",
-  "o4-mini-deep-research": "o4 Mini Deep Research",
-  "o4-mini":               "o4 Mini",
-};
-
-function normalizePricing(raw: unknown): PricingConfig | null {
-  if (!raw || typeof raw !== "object") return null;
-  const r = raw as Record<string, unknown>;
-  const p = r.pricing as Record<string, unknown> | undefined;
-  if (!p) return null;
-  const out: PricingConfig = JSON.parse(JSON.stringify(DEFAULT_PRICING));
-  for (const k of PRICED_MODEL_KEYS) {
-    const row = p[k] as { input?: unknown; output?: unknown } | undefined;
-    if (row && typeof row.input === "number" && typeof row.output === "number") {
-      out.pricing[k] = { input: row.input, output: row.output };
+// Walk common error shapes to find the human-readable message. SDK
+// action errors arrive as plain objects ({ message, error, ... }), Error
+// instances have .message, plain strings are themselves, and as a last
+// resort we JSON.stringify so the operator at least sees the payload.
+function extractErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message) return err.message;
+  if (typeof err === "string") return err;
+  if (err && typeof err === "object") {
+    const e = err as Record<string, unknown>;
+    if (typeof e.message === "string") return e.message;
+    if (typeof e.error === "string") return e.error;
+    if (typeof e.body === "string") return e.body;
+    const data = e.data as Record<string, unknown> | undefined;
+    if (data && typeof data === "object") {
+      if (typeof data.message === "string") return data.message;
+      if (typeof data.error === "string") return data.error;
+    }
+    try {
+      const dump = JSON.stringify(err);
+      if (dump && dump !== "{}") return dump;
+    } catch {
+      /* fall through */
     }
   }
-  const m = r.margin as { percent?: unknown } | undefined;
+  return String(err);
+}
+
+// Locate the PricingConfig inside any wrapping the worker's getPricing
+// might apply. Walks at most two levels deep looking for an object that
+// has a `pricing` key whose value is itself an object of RateRow-shaped
+// entries.
+function locatePricingConfig(raw: unknown): Record<string, unknown> | null {
+  if (!raw || typeof raw !== "object") return null;
+  const candidates: Array<Record<string, unknown>> = [];
+  candidates.push(raw as Record<string, unknown>);
+  for (const c of [...candidates]) {
+    if (c.pricing && typeof c.pricing === "object") {
+      candidates.push(c.pricing as Record<string, unknown>);
+    }
+    if (c.data && typeof c.data === "object") {
+      candidates.push(c.data as Record<string, unknown>);
+    }
+  }
+  for (const c of candidates) {
+    const p = c.pricing;
+    if (!p || typeof p !== "object") continue;
+    for (const v of Object.values(p as Record<string, unknown>)) {
+      if (v && typeof v === "object") {
+        const r = v as Record<string, unknown>;
+        if (typeof r.input === "number" && typeof r.output === "number") {
+          return c;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function normalizePricing(raw: unknown): PricingConfig | null {
+  const source = locatePricingConfig(raw);
+  if (!source) {
+    if (raw !== null && raw !== undefined) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[openai-token-cost-reports] normalizePricing could not find a rate table in getPricing response",
+        raw,
+      );
+    }
+    return null;
+  }
+  const p = source.pricing as Record<string, unknown>;
+  const out: PricingConfig = {
+    pricing: {},
+    margin: { percent: 0 },
+    effective_input_rate_multiplier: 1,
+  };
+  for (const [key, row] of Object.entries(p)) {
+    if (!row || typeof row !== "object") continue;
+    const r2 = row as Record<string, unknown>;
+    if (typeof r2.input !== "number" || typeof r2.output !== "number") continue;
+    const next: RateRow = { input: r2.input, output: r2.output };
+    if (typeof r2.display_name === "string" && r2.display_name.length > 0) {
+      next.display_name = r2.display_name;
+    }
+    out.pricing[key] = next;
+  }
+  const m = source.margin as { percent?: unknown } | undefined;
   if (m && typeof m.percent === "number") {
     out.margin.percent = m.percent;
-  } else if (typeof (r as { marginPercent?: unknown }).marginPercent === "number") {
-    // tolerate old flat shape if any was persisted
-    out.margin.percent = (r as { marginPercent: number }).marginPercent;
+  }
+  const mult = (source as { effective_input_rate_multiplier?: unknown }).effective_input_rate_multiplier;
+  if (typeof mult === "number" && Number.isFinite(mult) && mult > 0) {
+    out.effective_input_rate_multiplier = mult;
   }
   return out;
 }
@@ -978,6 +993,7 @@ function PerModelCard(props: {
   priced: boolean;
   currency: CurrencyCode;
   settingsLinkProps: SettingsLinkProps;
+  pricingConfig: PricingConfig | null;
 }) {
   if (props.loading) {
     return (
@@ -1025,7 +1041,7 @@ function PerModelCard(props: {
           const inputPct = totalPct * inputShare;
           const outputPct = totalPct * (1 - inputShare);
           const label =
-            (MODEL_LABELS as Record<string, string>)[r.model] ?? r.model;
+            props.pricingConfig?.pricing[r.model]?.display_name ?? r.model;
           return (
             <div key={r.model} style={styles.modelRow}>
               <div style={styles.modelLabel}>{label}</div>
@@ -1066,6 +1082,7 @@ function PerAgentCard(props: {
   loading: boolean;
   data: PerAgentResponse | null;
   settingsLinkProps: SettingsLinkProps;
+  pricingConfig: PricingConfig | null;
 }) {
   if (props.loading) {
     return (
@@ -1186,7 +1203,7 @@ function PerAgentCard(props: {
                       <span style={{ color: "var(--muted-foreground)", marginRight: 8 }}>
                         └
                       </span>
-                      {(MODEL_LABELS as Record<string, string>)[m.model] ??
+                      {props.pricingConfig?.pricing[m.model]?.display_name ??
                         m.model}
                     </td>
                     <td style={subRowCell}>{fmtInt(m.runs)}</td>
@@ -1831,6 +1848,7 @@ export function UsagePage(): JSX.Element {
         priced={!!perModel.data?.priced}
         currency={currency}
         settingsLinkProps={settingsLinkProps}
+        pricingConfig={pricingConfig}
       />
 
       {/* By agent */}
@@ -1838,6 +1856,7 @@ export function UsagePage(): JSX.Element {
         loading={perAgent.loading}
         data={perAgent.data ?? null}
         settingsLinkProps={settingsLinkProps}
+        pricingConfig={pricingConfig}
       />
 
       {/* Daily chart */}
@@ -1882,9 +1901,7 @@ export function SettingsPage(): JSX.Element {
   const nav = useHostNavigation();
   const companyId = host?.companyId ?? "";
   const usageLinkProps = nav.linkProps(USAGE_HREF);
-  const pricing = usePluginData<PricingConfig | null>("getPricing", {
-    companyId,
-  });
+  const pricing = usePluginData<unknown>("getPricing", { companyId });
   const currencyConfig = usePluginData<CurrencyConfigResponse>(
     "getCurrencyConfig",
     { companyId },
@@ -1895,8 +1912,13 @@ export function SettingsPage(): JSX.Element {
   const refreshFxAction = usePluginAction("refreshFxNow");
   const toast = usePluginToast();
 
-  const [config, setConfig] = useState<PricingConfig>(DEFAULT_PRICING);
+  const [config, setConfig] = useState<PricingConfig>({
+    pricing: {},
+    margin: { percent: 0 },
+    effective_input_rate_multiplier: 1,
+  });
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [savingCurrency, setSavingCurrency] = useState(false);
   const [refreshingFx, setRefreshingFx] = useState(false);
 
@@ -1905,29 +1927,17 @@ export function SettingsPage(): JSX.Element {
     if (normalized) setConfig(normalized);
   }, [pricing.data]);
 
-  const updateRate = (
-    model: ModelKey,
-    field: "input" | "output",
-    value: string,
-  ) => {
-    const n = Number(value);
-    setConfig((c) => ({
-      ...c,
-      pricing: {
-        ...c.pricing,
-        [model]: { ...c.pricing[model], [field]: isFinite(n) ? n : 0 },
-      },
-    }));
-  };
-
   const save = async () => {
     setSaving(true);
     try {
       await setPricing({ companyId, config: config as unknown as Record<string, unknown> });
+      setSaveError(null);
       toast?.({ title: "Pricing saved", tone: "success" });
       pricing.refresh();
     } catch (err) {
-      toast?.({ title: "Save failed", body: String(err), tone: "error" });
+      const msg = extractErrorMessage(err);
+      setSaveError(msg);
+      toast?.({ title: "Save failed", body: msg, tone: "error" });
     } finally {
       setSaving(false);
     }
@@ -1999,16 +2009,9 @@ export function SettingsPage(): JSX.Element {
     );
   }
 
-  const models: { key: ModelKey; label: string }[] = PRICED_MODEL_KEYS.map(
-    (key) => ({ key, label: MODEL_LABELS[key] }),
+  const sortedRows = Object.entries(config.pricing).sort(([a], [b]) =>
+    a.localeCompare(b),
   );
-
-  const resetToDefaults = () => {
-    setConfig((c) => ({
-      ...c,
-      pricing: JSON.parse(JSON.stringify(DEFAULT_PRICING.pricing)),
-    }));
-  };
 
   return (
     <div className="tu-root" style={styles.page}><ThemeStyles />
@@ -2047,45 +2050,176 @@ export function SettingsPage(): JSX.Element {
       <table style={{ ...styles.table, marginTop: 16 }}>
         <thead>
           <tr>
-            <th style={styles.th}>Model</th>
-            <th style={styles.th}>Input $/1M</th>
-            <th style={styles.th}>Output $/1M</th>
+            <th style={styles.th}>Model key</th>
+            <th style={styles.th}>Display name</th>
+            <th style={styles.th}>Input $/MTok</th>
+            <th style={styles.th}>Output $/MTok</th>
+            <th style={styles.th}>Delete</th>
           </tr>
         </thead>
         <tbody>
-          {models.map((m) => (
-            <tr key={m.key}>
-              <td style={styles.td}>{m.label}</td>
+          {pricing.loading && sortedRows.length === 0 ? (
+            <tr>
+              <td style={styles.td} colSpan={5}>
+                Loading pricing…
+              </td>
+            </tr>
+          ) : sortedRows.length === 0 ? (
+            <tr>
+              <td style={styles.td} colSpan={5}>
+                No rate rows yet. Click <strong>Import OpenAI defaults</strong> below to seed the table.
+              </td>
+            </tr>
+          ) : null}
+          {sortedRows.map(([key, row]) => (
+            <tr key={key}>
+              <td style={styles.td}><code>{key}</code></td>
               <td style={styles.td}>
                 <input
-                  type="number"
-                  step="0.1"
-                  min="0"
-                  value={config.pricing[m.key].input}
+                  type="text"
+                  value={row.display_name ?? ""}
+                  placeholder={key}
                   onChange={(e) =>
-                    updateRate(m.key, "input", e.target.value)
+                    setConfig((c) => ({
+                      ...c,
+                      pricing: {
+                        ...c.pricing,
+                        [key]: { ...c.pricing[key], display_name: e.target.value || undefined },
+                      },
+                    }))
                   }
-                  style={{ ...styles.input, width: 120 }}
-                  aria-label={`${m.label} input price per 1M tokens`}
+                  style={{ ...styles.input, minWidth: 180 }}
                 />
               </td>
               <td style={styles.td}>
                 <input
                   type="number"
-                  step="0.1"
+                  step="0.01"
                   min="0"
-                  value={config.pricing[m.key].output}
+                  value={row.input}
                   onChange={(e) =>
-                    updateRate(m.key, "output", e.target.value)
+                    setConfig((c) => ({
+                      ...c,
+                      pricing: {
+                        ...c.pricing,
+                        [key]: { ...c.pricing[key], input: Number(e.target.value) || 0 },
+                      },
+                    }))
                   }
                   style={{ ...styles.input, width: 120 }}
-                  aria-label={`${m.label} output price per 1M tokens`}
                 />
+              </td>
+              <td style={styles.td}>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={row.output}
+                  onChange={(e) =>
+                    setConfig((c) => ({
+                      ...c,
+                      pricing: {
+                        ...c.pricing,
+                        [key]: { ...c.pricing[key], output: Number(e.target.value) || 0 },
+                      },
+                    }))
+                  }
+                  style={{ ...styles.input, width: 120 }}
+                />
+              </td>
+              <td style={styles.td}>
+                <button
+                  type="button"
+                  style={styles.btn}
+                  onClick={() =>
+                    setConfig((c) => {
+                      const next = { ...c.pricing };
+                      delete next[key];
+                      return { ...c, pricing: next };
+                    })
+                  }
+                  aria-label={`Delete rate for ${key}`}
+                >×</button>
               </td>
             </tr>
           ))}
         </tbody>
       </table>
+
+      <form
+        data-add-rate
+        onSubmit={(e) => {
+          e.preventDefault();
+          const fd = new FormData(e.currentTarget);
+          const key = String(fd.get("key") ?? "").trim();
+          const input = Number(fd.get("input") ?? 0);
+          const output = Number(fd.get("output") ?? 0);
+          const display_name = String(fd.get("display_name") ?? "").trim() || undefined;
+          if (!key) return;
+          setConfig((c) => ({
+            ...c,
+            pricing: { ...c.pricing, [key]: { input, output, display_name } },
+          }));
+          (e.currentTarget as HTMLFormElement).reset();
+        }}
+        style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}
+      >
+        <input name="key" placeholder="model id (e.g. gpt-5.6)" required style={{ ...styles.input, minWidth: 240 }} />
+        <input name="display_name" placeholder="display name (optional)" style={{ ...styles.input, minWidth: 200 }} />
+        <input name="input" type="number" step="0.01" min="0" placeholder="input $/MTok" required style={{ ...styles.input, width: 140 }} />
+        <input name="output" type="number" step="0.01" min="0" placeholder="output $/MTok" required style={{ ...styles.input, width: 140 }} />
+        <button type="submit" style={styles.btn}>Add rate</button>
+        <button
+          type="button"
+          style={styles.btn}
+          title="Merge OpenAI's published list-price defaults into the table. Operator-set rows are kept; missing rows are filled in. Click Save to persist."
+          onClick={() => {
+            setConfig((c) => ({
+              ...c,
+              pricing: {
+                ...DEFAULT_SEED_PRICING.pricing,
+                ...c.pricing,
+              },
+            }));
+          }}
+        >Import OpenAI defaults</button>
+      </form>
+
+      <div style={{ marginTop: 20 }}>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <label style={{ fontSize: 13 }} htmlFor="effective-input-rate-multiplier">
+            Effective input rate multiplier
+          </label>
+          <input
+            id="effective-input-rate-multiplier"
+            type="number"
+            step="0.01"
+            min="0.01"
+            max="1"
+            defaultValue={config.effective_input_rate_multiplier ?? 1}
+            key={`mult-${config.effective_input_rate_multiplier ?? 1}`}
+            onBlur={(e) => {
+              const n = parseFloat(e.target.value);
+              const next =
+                Number.isFinite(n) && n > 0 && n <= 1
+                  ? n
+                  : (config.effective_input_rate_multiplier ?? 1);
+              if (Number.isFinite(n) && (n <= 0 || n > 1)) {
+                e.target.value = String(next);
+              }
+              setConfig((c) => ({
+                ...c,
+                effective_input_rate_multiplier: next,
+              }));
+            }}
+            style={{ ...styles.input, width: 140 }}
+          />
+          <span style={{ fontSize: 12, color: "var(--tu-muted, #666)" }}>
+            Default 1.0 = full list price. Most useful for tuning the effective input
+            rate against your cache-hit ratio (OpenAI cached input is ~10% of standard).
+          </span>
+        </div>
+      </div>
 
       {/* Billing currency + FX status */}
       <div
@@ -2186,15 +2320,23 @@ export function SettingsPage(): JSX.Element {
         >
           {saving ? "Saving…" : "Save"}
         </button>
-        <button
-          style={styles.btn}
-          onClick={resetToDefaults}
-          disabled={saving}
-          title="Restore the bundled OpenAI list prices for all rows"
-        >
-          Reset to defaults
-        </button>
       </div>
+      {saveError && (
+        <div
+          style={{
+            marginTop: 12,
+            padding: "10px 12px",
+            borderLeft: "3px solid #ef4444",
+            background: "rgba(239, 68, 68, 0.08)",
+            borderRadius: 4,
+            fontSize: 13,
+            maxWidth: 720,
+            lineHeight: 1.5,
+          }}
+        >
+          <strong>Save failed.</strong> {saveError}
+        </div>
+      )}
     </div>
   );
 }
