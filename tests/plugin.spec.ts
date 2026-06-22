@@ -366,3 +366,157 @@ describe("isPricingConfig margin bounds", () => {
     expect(isPricingConfig(buildConfig(-Infinity))).toBe(false);
   });
 });
+
+// ---- Task 2: free-form pricing primitives ---------------------------------
+//
+// These cover the new pure module at src/pricing.ts that supersedes the 1.x
+// ModelKey-union shape still living in src/worker.ts. Task 6 removes the
+// legacy types; until then both coexist and the alias `PricingConfigV2`
+// disambiguates from the existing `PricingConfig` import above.
+
+import {
+  validatePricingConfig,
+  isValidPricingConfig,
+  findActiveSnapshot,
+  lookupRate,
+  DEFAULT_SEED_PRICING,
+  type PricingSnapshot,
+  type RateRow,
+} from "../src/pricing";
+
+// Note: the V2 PricingConfig type isn't imported here to avoid a collision
+// with the V1 `PricingConfig` already imported from ../src/worker. Task 6
+// removes the V1 type; at that point the V2 import can come back under the
+// original name.
+
+describe("validatePricingConfig (verbose)", () => {
+  it("returns null for the seed config", () => {
+    expect(validatePricingConfig(DEFAULT_SEED_PRICING)).toBeNull();
+  });
+
+  it("accepts an empty pricing table", () => {
+    expect(
+      validatePricingConfig({ pricing: {}, margin: { percent: 0 } }),
+    ).toBeNull();
+  });
+
+  it("accepts arbitrary operator-defined keys", () => {
+    expect(
+      validatePricingConfig({
+        pricing: { "some-future-model-xyz": { input: 1, output: 2 } },
+        margin: { percent: 5 },
+      }),
+    ).toBeNull();
+  });
+
+  it("reports the offending row + field for negative input", () => {
+    const msg = validatePricingConfig({
+      pricing: { "gpt-5.5": { input: -1, output: 2 } },
+      margin: { percent: 0 },
+    });
+    expect(msg).toContain("gpt-5.5");
+    expect(msg).toContain("input");
+    expect(msg).toContain(">= 0");
+  });
+
+  it("reports the offending row for non-number input", () => {
+    const msg = validatePricingConfig({
+      pricing: { "x": { input: "5", output: 2 } as unknown as RateRow },
+      margin: { percent: 0 },
+    });
+    expect(msg).toContain("finite number");
+  });
+
+  it("reports empty-string row keys", () => {
+    const msg = validatePricingConfig({
+      pricing: { "": { input: 1, output: 2 } },
+      margin: { percent: 0 },
+    });
+    expect(msg).toContain("non-empty string");
+  });
+
+  it("reports margin out of range", () => {
+    expect(validatePricingConfig({ pricing: {}, margin: { percent: -1 } }))
+      .toContain("margin.percent");
+    expect(validatePricingConfig({ pricing: {}, margin: { percent: 501 } }))
+      .toContain("margin.percent");
+  });
+
+  it("reports multiplier out of range", () => {
+    expect(
+      validatePricingConfig({
+        pricing: {},
+        margin: { percent: 0 },
+        effective_input_rate_multiplier: 0,
+      }),
+    ).toContain("multiplier");
+    expect(
+      validatePricingConfig({
+        pricing: {},
+        margin: { percent: 0 },
+        effective_input_rate_multiplier: 1.5,
+      }),
+    ).toContain("multiplier");
+  });
+});
+
+describe("isValidPricingConfig (boolean wrapper)", () => {
+  it("agrees with validatePricingConfig", () => {
+    expect(isValidPricingConfig(DEFAULT_SEED_PRICING)).toBe(true);
+    expect(isValidPricingConfig({ pricing: {}, margin: { percent: -1 } })).toBe(false);
+  });
+});
+
+describe("findActiveSnapshot", () => {
+  const mkSnap = (effective_from: string): PricingSnapshot => ({
+    effective_from,
+    config: { pricing: {}, margin: { percent: 0 } },
+  });
+
+  it("returns null when there are no snapshots", () => {
+    expect(findActiveSnapshot([], "2026-04-01T00:00:00Z")).toBeNull();
+  });
+
+  it("returns the only snapshot in the N=1 case regardless of event time", () => {
+    const one = mkSnap("2026-06-01T00:00:00Z");
+    expect(findActiveSnapshot([one], "1990-01-01T00:00:00Z")).toBe(one);
+    expect(findActiveSnapshot([one], "2030-01-01T00:00:00Z")).toBe(one);
+  });
+
+  it("returns the greatest effective_from <= occurredAt (snapshots sorted DESC)", () => {
+    const april = mkSnap("2026-04-01T00:00:00Z");
+    const june = mkSnap("2026-06-01T00:00:00Z");
+    const dec = mkSnap("2026-12-01T00:00:00Z");
+    const desc = [dec, june, april];
+    expect(findActiveSnapshot(desc, "2026-04-15T00:00:00Z")).toBe(april);
+    expect(findActiveSnapshot(desc, "2026-07-15T00:00:00Z")).toBe(june);
+    expect(findActiveSnapshot(desc, "2026-12-15T00:00:00Z")).toBe(dec);
+  });
+
+  it("falls back to the earliest snapshot for events that predate all", () => {
+    const april = mkSnap("2026-04-01T00:00:00Z");
+    const june = mkSnap("2026-06-01T00:00:00Z");
+    const desc = [june, april];
+    expect(findActiveSnapshot(desc, "2025-01-01T00:00:00Z")).toBe(april);
+  });
+});
+
+describe("lookupRate", () => {
+  const snap: PricingSnapshot = {
+    effective_from: "1970-01-01T00:00:00Z",
+    config: {
+      pricing: { "gpt-5.5": { input: 5, output: 30 } },
+      margin: { percent: 0 },
+    },
+  };
+
+  it("returns the row for an exact match", () => {
+    expect(lookupRate(snap, "gpt-5.5")).toEqual({ input: 5, output: 30 });
+  });
+
+  it("returns undefined for an unmatched raw_model — no fuzzy fallback", () => {
+    expect(lookupRate(snap, "gpt-5.4")).toBeUndefined();
+    expect(lookupRate(snap, "gpt-5.5-2026-08-01")).toBeUndefined();
+    expect(lookupRate(snap, "")).toBeUndefined();
+  });
+});
