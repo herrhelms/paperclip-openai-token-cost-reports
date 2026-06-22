@@ -185,6 +185,14 @@ function pricingScope(companyId: string) {
   };
 }
 
+function migrationScope() {
+  return {
+    scopeKind: "instance" as const,
+    scopeId: "_global",
+    stateKey: "migration_2_0_0_done",
+  };
+}
+
 // Snapshot storage helpers. The 1.x single-doc ctx.state config is gone;
 // authoritative pricing lives in pricing_config_history (one row per save).
 // Reads are DESC by effective_from so findActiveSnapshot's linear scan is
@@ -235,6 +243,78 @@ async function insertSnapshot(
            note = EXCLUDED.note`,
     [companyId, effectiveFrom, JSON.stringify(config), note],
   );
+}
+
+async function runMigration2_0_0(ctx: PluginContext): Promise<void> {
+  const marker = await ctx.state.get(migrationScope());
+  if (marker === true) return;
+
+  ctx.logger.info("migration 2.0.0 starting");
+
+  const companies = await ctx.db.query<{ company_id: string }>(
+    `SELECT DISTINCT company_id FROM ${q(ctx, "usage_events")}`,
+  );
+  let migratedConfigs = 0;
+  for (const { company_id } of companies) {
+    const existing = await ctx.state.get(pricingScope(company_id));
+    if (existing && typeof existing === "object") {
+      const e = existing as Record<string, unknown>;
+      const legacyPricing = (e.pricing ?? {}) as Record<string, { input: number; output: number }>;
+      const legacyMargin = ((e.margin as { percent?: number } | undefined)?.percent) ?? 0;
+      const config = {
+        pricing: legacyPricing,
+        margin: { percent: legacyMargin },
+        effective_input_rate_multiplier: 1,
+      };
+      if (validatePricingConfig(config) === null) {
+        await insertSnapshot(
+          ctx,
+          company_id,
+          "1970-01-01T00:00:00Z",
+          config,
+          "auto-migrated from 1.x ctx.state",
+        );
+        migratedConfigs++;
+      }
+    }
+  }
+
+  ctx.logger.info("migration 2.0.0 ctx.state -> history done", { migratedConfigs });
+
+  // Cleanup sweep: any usage_events row with model='unknown' and a
+  // non-'unknown' raw_model gets model = raw_model. 2.0.0 doesn't
+  // normalize — pricing match is exact against the operator's table.
+  let resweptRows = 0;
+  const sweepRows = await ctx.db.query<{
+    source_event_id: string;
+    company_id: string;
+    day: string;
+    raw_model: string | null;
+  }>(
+    `SELECT source_event_id, company_id, day, raw_model
+       FROM ${q(ctx, "usage_events")}
+      WHERE model = 'unknown' AND raw_model IS NOT NULL`,
+  );
+  const affectedDays = new Set<string>();
+  for (const r of sweepRows) {
+    if (!r.raw_model) continue;
+    if (r.raw_model !== "unknown") {
+      await ctx.db.execute(
+        `UPDATE ${q(ctx, "usage_events")} SET model = $1 WHERE source_event_id = $2`,
+        [r.raw_model, r.source_event_id],
+      );
+      resweptRows++;
+      affectedDays.add(`${r.company_id}|${r.day}`);
+    }
+  }
+  for (const key of affectedDays) {
+    const [companyId, day] = key.split("|");
+    await rollupCompanyDay(ctx, companyId, day);
+  }
+  ctx.logger.info("migration 2.0.0 sweep done", { resweptRows, daysRolledUp: affectedDays.size });
+
+  await ctx.state.set(migrationScope(), true);
+  ctx.logger.info("migration 2.0.0 complete");
 }
 
 export async function loadActiveConfig(
@@ -2300,6 +2380,14 @@ const plugin = definePlugin({
       const result = await runBackfill(ctx, companyId, from, to);
       return { ...result, from, to };
     });
+
+    try {
+      await runMigration2_0_0(ctx);
+    } catch (err) {
+      ctx.logger.warn("migration 2.0.0 failed; will retry on next worker restart", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   },
 
   async onApiRequest(input: PluginApiRequestInput): Promise<PluginApiResponse> {
