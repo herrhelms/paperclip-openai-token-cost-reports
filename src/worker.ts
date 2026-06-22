@@ -8,7 +8,7 @@ import type {
   PluginContext,
   PluginEvent,
 } from "@paperclipai/plugin-sdk";
-import type { PricingConfig as NewPricingConfig, PricingSnapshot } from "./pricing";
+import type { PricingConfig, PricingSnapshot } from "./pricing";
 import {
   validatePricingConfig,
   findActiveSnapshot,
@@ -16,118 +16,19 @@ import {
   DEFAULT_SEED_PRICING,
 } from "./pricing";
 
-// Model keys are stable identifiers stored in usage_events.model / usage_daily.model.
-// Format: `<family>-<major>-<minor>[-1m]`. The `-1m` suffix marks the 1M-token-context variant.
-// "unknown" is the catch-all for anything normalizeModel can't classify.
-export type ModelKey =
-  | "gpt-5-5"
-  | "gpt-5-5-pro"
-  | "gpt-5-4"
-  | "gpt-5-4-mini"
-  | "gpt-5-4-nano"
-  | "gpt-5-4-pro"
-  | "gpt-5-3-codex"
-  | "chat-latest"
-  | "computer-use-preview"
-  | "o3-deep-research"
-  | "o4-mini-deep-research"
-  | "o4-mini"
-  | "unknown";
-
-export const PRICED_MODEL_KEYS: ReadonlyArray<Exclude<ModelKey, "unknown">> = [
-  "gpt-5-5",
-  "gpt-5-5-pro",
-  "gpt-5-4",
-  "gpt-5-4-mini",
-  "gpt-5-4-nano",
-  "gpt-5-4-pro",
-  "gpt-5-3-codex",
-  "chat-latest",
-  "computer-use-preview",
-  "o3-deep-research",
-  "o4-mini-deep-research",
-  "o4-mini",
-];
-
-type PricingRates = Record<Exclude<ModelKey, "unknown">, { input: number; output: number }>;
-
-export interface PricingConfig {
-  pricing: PricingRates;
-  margin: { percent: number };
-}
+// 2.0.0: usage_events.model and usage_daily.model are now free-form strings —
+// whatever the host emitted, preserved verbatim. The ModelKey union, the
+// PRICED_MODEL_KEYS list, normalizeModel, LEGACY_MODEL_REMAP, the worker-local
+// DEFAULT_PRICING + isPricingConfig + upgradePricingConfig, and the
+// CSV_MODEL_LABELS lookup are all gone. Pricing lookup is an exact match against
+// the operator's free-form rate table (see lookupRate in ./pricing).
 
 interface DailyRow {
   company_id: string;
   day: string;
-  model: ModelKey;
+  model: string;
   input_tokens: number;
   output_tokens: number;
-}
-
-// Rates from https://developers.openai.com/api/docs/pricing, 2026-06-20 fetch.
-// Cached-input pricing is NOT currently tracked per-event by this plugin;
-// the published cached-input rates are documented in the README for operators
-// who want to override the input rate to reflect their cache hit ratio.
-const DEFAULT_PRICING: PricingConfig = {
-  pricing: {
-    "gpt-5-5":               { input: 5.00,  output: 30.00 },
-    "gpt-5-5-pro":           { input: 30.00, output: 180.00 },
-    "gpt-5-4":               { input: 2.50,  output: 15.00 },
-    "gpt-5-4-mini":          { input: 0.75,  output: 4.50 },
-    "gpt-5-4-nano":          { input: 0.20,  output: 1.25 },
-    "gpt-5-4-pro":           { input: 30.00, output: 180.00 },
-    "gpt-5-3-codex":         { input: 1.75,  output: 14.00 },
-    "chat-latest":           { input: 5.00,  output: 30.00 },
-    "computer-use-preview":  { input: 1.50,  output: 6.00 },
-    "o3-deep-research":      { input: 5.00,  output: 20.00 },
-    "o4-mini-deep-research": { input: 1.00,  output: 4.00 },
-    "o4-mini":               { input: 4.00,  output: 16.00 },
-  },
-  margin: { percent: 0 },
-};
-
-const LEGACY_MODEL_REMAP: Record<string, ModelKey> = {};
-
-export function normalizeModel(raw: unknown): ModelKey {
-  if (typeof raw !== "string") return "unknown";
-  const s = raw.toLowerCase().trim();
-  const remap = LEGACY_MODEL_REMAP[s];
-  if (remap) return remap;
-  if (s in DEFAULT_PRICING.pricing) return s as ModelKey;
-  // Strip ISO date snapshot suffix (-YYYY-MM-DD) and retry exact match.
-  // E.g. "o4-mini-2025-04-16" -> "o4-mini".
-  const noSnapshot = s.replace(/-\d{4}-\d{2}-\d{2}$/, "");
-  if (noSnapshot !== s && noSnapshot in DEFAULT_PRICING.pricing) {
-    return noSnapshot as ModelKey;
-  }
-  // Exact codex check first — its slug doesn't fit the version-suffix pattern.
-  if (/^gpt-5[._-]?3[._-]codex/.test(s)) return "gpt-5-3-codex";
-  // gpt-5.X with optional suffix.
-  const m = s.match(/^gpt-5[._-]?(\d)(?:[._-](pro|mini|nano))?/);
-  if (m) {
-    const minor = m[1];
-    const variant = m[2];
-    const candidate = variant
-      ? (`gpt-5-${minor}-${variant}` as ModelKey)
-      : (`gpt-5-${minor}` as ModelKey);
-    if (candidate in DEFAULT_PRICING.pricing) return candidate;
-  }
-  // o-series family: o3 / o4 with optional -mini, optional -deep-research.
-  // Snapshot suffixes were stripped above. Examples: "o3-deep-research",
-  // "o4-mini", "o4-mini-deep-research".
-  const oMatch = s.match(/^(o[34])(?:[._-](mini|pro))?(?:[._-](deep[._-]research))?/);
-  if (oMatch) {
-    const base = oMatch[1];
-    const size = oMatch[2];
-    const deepResearch = oMatch[3];
-    let candidate: string;
-    if (deepResearch && size === "mini") candidate = `${base}-mini-deep-research`;
-    else if (deepResearch) candidate = `${base}-deep-research`;
-    else if (size) candidate = `${base}-${size}`;
-    else candidate = base;
-    if (candidate in DEFAULT_PRICING.pricing) return candidate as ModelKey;
-  }
-  return "unknown";
 }
 
 function toDay(iso: string): string {
@@ -203,7 +104,7 @@ async function loadAllSnapshots(
 ): Promise<PricingSnapshot[]> {
   const rows = await ctx.db.query<{
     effective_from: string;
-    config_json: NewPricingConfig;
+    config_json: PricingConfig;
     created_at: string;
     created_by: string | null;
     note: string | null;
@@ -231,7 +132,7 @@ async function insertSnapshot(
   ctx: PluginContext,
   companyId: string,
   effectiveFrom: string,
-  config: NewPricingConfig,
+  config: PricingConfig,
   note: string | null,
 ): Promise<void> {
   await ctx.db.execute(
@@ -321,53 +222,13 @@ export async function loadActiveConfig(
   ctx: PluginContext,
   companyId: string,
   occurredAt: string,
-): Promise<NewPricingConfig | null> {
+): Promise<PricingConfig | null> {
   const snapshots = await loadAllSnapshots(ctx, companyId);
   const snap = findActiveSnapshot(snapshots, occurredAt);
   return snap?.config ?? null;
 }
 
 export { lookupRate, findActiveSnapshot } from "./pricing";
-
-export function isPricingConfig(v: unknown): v is PricingConfig {
-  if (!v || typeof v !== "object") return false;
-  const c = v as Record<string, unknown>;
-  const p = c.pricing as Record<string, unknown> | undefined;
-  if (!p || typeof p !== "object") return false;
-  for (const k of PRICED_MODEL_KEYS) {
-    const r = p[k] as Record<string, unknown> | undefined;
-    if (!r || typeof r.input !== "number" || typeof r.output !== "number") return false;
-  }
-  const margin = c.margin as Record<string, unknown> | undefined;
-  if (
-    !margin ||
-    typeof margin.percent !== "number" ||
-    !Number.isFinite(margin.percent) ||
-    margin.percent < 0 ||
-    margin.percent > 500
-  ) {
-    return false;
-  }
-  return true;
-}
-
-// Upgrade older persisted configs (pre-0.2.0) to the new keyed shape, preserving
-// any operator-set values where possible. Anything we can't map falls back to defaults.
-export function upgradePricingConfig(raw: unknown): PricingConfig {
-  const out: PricingConfig = JSON.parse(JSON.stringify(DEFAULT_PRICING));
-  if (!raw || typeof raw !== "object") return out;
-  const c = raw as Record<string, unknown>;
-  const p = (c.pricing ?? {}) as Record<string, unknown>;
-  for (const k of PRICED_MODEL_KEYS) {
-    const row = p[k] as { input?: unknown; output?: unknown } | undefined;
-    if (row && typeof row.input === "number" && typeof row.output === "number") {
-      out.pricing[k] = { input: row.input, output: row.output };
-    }
-  }
-  const m = c.margin as { percent?: unknown } | undefined;
-  if (m && typeof m.percent === "number") out.margin.percent = m.percent;
-  return out;
-}
 
 // Resolves a single active snapshot at `occurredAt`. Callers wanting the
 // "current" config pass `new Date().toISOString()`. All five cost-
@@ -378,7 +239,7 @@ export async function loadPricing(
   ctx: PluginContext,
   companyId: string,
   occurredAt: string,
-): Promise<NewPricingConfig | null> {
+): Promise<PricingConfig | null> {
   return loadActiveConfig(ctx, companyId, occurredAt);
 }
 
@@ -635,7 +496,7 @@ export function priceFor(
   rawModel: string,
   input: number,
   output: number,
-  cfg: NewPricingConfig,
+  cfg: PricingConfig,
 ): { inputCost: number; outputCost: number } {
   const rate = lookupRate(
     { effective_from: "", config: cfg },
@@ -752,7 +613,7 @@ async function runBackfill(
         `cost_event:${r.id}`,
         r.company_id,
         r.agent_id,
-        normalizeModel(r.model),
+        String(r.model ?? "unknown"),
         inp + cached,
         out,
         r.occurred_at,
@@ -825,7 +686,9 @@ async function ingestEvent(ctx: PluginContext, event: PluginEvent): Promise<void
     (payload.agent_id as string | undefined) ??
     (e.actorType === "agent" ? ((e.actorId as string) ?? null) : null);
   const model = payload.model;
-  const rawModel = typeof model === "string" ? model : null;
+  // 2.0.0: no normalizer. model = raw_model = whatever the host emitted.
+  // Pricing lookup is exact match against the operator's free-form table.
+  const rawModel = typeof model === "string" ? model : "unknown";
   const inputTokens = Number(payload.inputTokens ?? payload.input_tokens ?? 0);
   const outputTokens = Number(payload.outputTokens ?? payload.output_tokens ?? 0);
   const cachedInputTokens = Number(
@@ -892,8 +755,8 @@ async function ingestEvent(ctx: PluginContext, event: PluginEvent): Promise<void
       sourceEventId,
       companyId,
       agentId,
-      normalizeModel(model),
-      rawModel,
+      rawModel,    // model — same as raw_model in 2.0.0
+      rawModel,    // raw_model — preserved verbatim
       provider,
       source,
       totalInput,
@@ -1021,23 +884,6 @@ export function slugifyForFilename(name: string): string {
     .slice(0, 40);
 }
 
-// Display labels for the CSV — match the UI's MODEL_LABELS so the client's
-// spreadsheet reads "GPT-5.5" instead of the internal "gpt-5-5".
-const CSV_MODEL_LABELS: Record<string, string> = {
-  "gpt-5-5": "GPT-5.5",
-  "gpt-5-5-pro": "GPT-5.5 Pro",
-  "gpt-5-4": "GPT-5.4",
-  "gpt-5-4-mini": "GPT-5.4 Mini",
-  "gpt-5-4-nano": "GPT-5.4 Nano",
-  "gpt-5-4-pro": "GPT-5.4 Pro",
-  "gpt-5-3-codex": "GPT-5.3 Codex",
-  "chat-latest": "ChatGPT (chat-latest)",
-  "computer-use-preview": "Computer Use Preview",
-  "o3-deep-research": "o3 Deep Research",
-  "o4-mini-deep-research": "o4 Mini Deep Research",
-  "o4-mini": "o4 Mini",
-};
-
 // Client-facing CSV: one row per (calendar-month, model) showing tokens and
 // the price the client owes — in the operator's chosen billing currency, with
 // margin applied. Doesn't surface the operator's underlying USD cost or any
@@ -1064,7 +910,7 @@ async function buildClientMonthlyCsv(
     month: string;
     month_start: string;
     month_end: string;
-    model: ModelKey;
+    model: string;
     input_tokens: number;
     output_tokens: number;
     cost_usd: number;
@@ -1155,7 +1001,9 @@ async function buildClientMonthlyCsv(
     const priceNative = hasPricing
       ? b.cost_usd * (1 + margin) * fxRate
       : null;
-    const modelLabel = CSV_MODEL_LABELS[b.model] ?? b.model;
+    const snap = findActiveSnapshot(snapshots, `${b.month_end}T12:00:00Z`);
+    const displayName = snap?.config.pricing[b.model]?.display_name ?? b.model;
+    const modelLabel = displayName;
     lines.push(
       [
         b.month,
@@ -1253,8 +1101,8 @@ interface CostsSubscriptionSummary {
 }
 
 interface CostsModelRow {
-  rawModel: string;                 // e.g. "claude-opus-4-7[1m]"
-  normalizedKey: ModelKey;          // e.g. "opus-4-7-1m"
+  rawModel: string;                 // verbatim host-emitted model string
+  normalizedKey: string;            // same as rawModel in 2.0.0 (no normalization)
   provider: string;                 // e.g. "anthropic"
   source: string;                   // e.g. "subscription" | "api"
   tokens: number;
@@ -1265,8 +1113,8 @@ interface CostsModelRow {
 // Per-agent breakdown (mirrors the host /costs page's "What each agent consumed" section).
 // One row per agent, with a nested per-(rawModel,source) sub-list.
 interface CostsAgentModelRow {
-  rawModel: string;                 // e.g. "claude-opus-4-7[1m]"
-  normalizedKey: ModelKey;
+  rawModel: string;                 // verbatim host-emitted model string
+  normalizedKey: string;            // same as rawModel in 2.0.0
   provider: string;
   source: string;
   tokens: number;
@@ -1304,7 +1152,7 @@ function priceTokens(
   rawModel: string,
   input: number,
   output: number,
-  cfg: NewPricingConfig | null,
+  cfg: PricingConfig | null,
 ): number | null {
   if (!cfg) return null;
   const { inputCost, outputCost } = priceFor(rawModel, input, output, cfg);
@@ -1327,7 +1175,7 @@ async function buildCostsOverview(
   const events = await ctx.db.query<{
     agent_id: string | null;
     raw_model: string | null;
-    model: ModelKey;
+    model: string;
     provider: string | null;
     source: string | null;
     input_tokens: number;
@@ -1397,7 +1245,7 @@ async function buildCostsOverview(
     string,
     {
       rawModel: string;
-      normalizedKey: ModelKey;
+      normalizedKey: string;
       provider: string;
       source: string;
       tokens: number;
@@ -1466,7 +1314,7 @@ async function buildCostsOverview(
     hasCost: boolean;
     models: Map<string, {
       rawModel: string;
-      normalizedKey: ModelKey;
+      normalizedKey: string;
       provider: string;
       source: string;
       tokens: number;
@@ -1848,7 +1696,7 @@ const plugin = definePlugin({
       const margin = (periodEndSnap?.config.margin.percent ?? 0) / 100;
 
       const byModel = new Map<
-        ModelKey,
+        string,
         {
           input_tokens: number;
           output_tokens: number;
@@ -1986,7 +1834,7 @@ const plugin = definePlugin({
         throw new Error(`Invalid pricing config: ${validationError}`);
       }
       const now = new Date().toISOString();
-      await insertSnapshot(ctx, companyId, now, config as NewPricingConfig, "via setPricing");
+      await insertSnapshot(ctx, companyId, now, config as PricingConfig, "via setPricing");
       ctx.logger.info("pricing snapshot appended", { companyId, effective_from: now });
       return { ok: true, effective_from: now };
     });
@@ -2005,7 +1853,7 @@ const plugin = definePlugin({
         throw new Error(`Invalid pricing config: ${validationError}`);
       }
       const note = params.note ? String(params.note) : null;
-      await insertSnapshot(ctx, companyId, effectiveFrom, config as NewPricingConfig, note);
+      await insertSnapshot(ctx, companyId, effectiveFrom, config as PricingConfig, note);
       ctx.logger.info("pricing snapshot appended", { companyId, effective_from: effectiveFrom, note });
       return { ok: true, effective_from: effectiveFrom };
     });
@@ -2015,7 +1863,7 @@ const plugin = definePlugin({
       if (!companyId) throw new Error("companyId is required");
       const sourceFrom = String(params.source_effective_from ?? "");
       if (!sourceFrom) throw new Error("source_effective_from is required");
-      const [src] = await ctx.db.query<{ config_json: NewPricingConfig }>(
+      const [src] = await ctx.db.query<{ config_json: PricingConfig }>(
         `SELECT config_json FROM ${q(ctx, "pricing_config_history")}
           WHERE company_id = $1 AND effective_from = $2::timestamptz`,
         [companyId, sourceFrom],
@@ -2128,7 +1976,7 @@ const plugin = definePlugin({
       // (agent_id, model) happens below after costs are accumulated.
       const rows = await ctx.db.query<{
         agent_id: string | null;
-        model: ModelKey;
+        model: string;
         day: string;
         runs: number | string;
         input_tokens: number | string;
@@ -2166,7 +2014,7 @@ const plugin = definePlugin({
       const fxRate = fx?.rate ?? 1;
 
       type ModelLine = {
-        model: ModelKey;
+        model: string;
         runs: number;
         input_tokens: number;
         output_tokens: number;
@@ -2181,7 +2029,7 @@ const plugin = definePlugin({
         // Per-(agent, model) accumulator. We hold a Map during the loop so
         // multiple per-day rows for the same model merge in-place; the final
         // shape exposes `models` as an array.
-        modelMap: Map<ModelKey, ModelLine>;
+        modelMap: Map<string, ModelLine>;
         totals: {
           runs: number;
           input_tokens: number;
