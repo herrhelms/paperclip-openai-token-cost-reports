@@ -133,6 +133,14 @@ type PricingConfig = {
   effective_input_rate_multiplier?: number;
 };
 
+type PricingSnapshot = {
+  effective_from: string;
+  config: PricingConfig;
+  note?: string | null;
+  created_at?: string;
+  created_by?: string | null;
+};
+
 // Walk common error shapes to find the human-readable message. SDK
 // action errors arrive as plain objects ({ message, error, ... }), Error
 // instances have .message, plain strings are themselves, and as a last
@@ -1896,6 +1904,81 @@ export function UsagePage(): JSX.Element {
 }
 
 
+function HistoryPanel({ companyId }: { companyId: string }): JSX.Element | null {
+  const history = usePluginData("listPricingHistory", { companyId });
+  const revertAction = usePluginAction("revertToPricingSnapshot");
+
+  if (history.loading) {
+    return <div style={{ fontSize: 12, color: "var(--tu-muted, #888)" }}>Loading history…</div>;
+  }
+  const snapshots = (history.data as { snapshots?: PricingSnapshot[] } | undefined)?.snapshots ?? [];
+  if (!snapshots.length) {
+    return (
+      <div style={{ fontSize: 12, color: "var(--tu-muted, #888)" }}>
+        No snapshot history yet. Save pricing once to create the first snapshot.
+      </div>
+    );
+  }
+  return (
+    <section style={{ marginTop: 24 }}>
+      <h3 style={{ fontSize: 14 }}>Pricing snapshots</h3>
+      <p style={{ fontSize: 12, color: "var(--tu-muted, #888)", maxWidth: 640 }}>
+        Each save creates a snapshot. Historical periods bill against the
+        snapshot active when the tokens were burned. Click "Revert" to copy
+        a snapshot's config into a new save with effective_from=now.
+      </p>
+      <ul style={{ listStyle: "none", padding: 0, marginTop: 12 }}>
+        {snapshots.map((s) => {
+          const ratecount = Object.keys(s.config.pricing ?? {}).length;
+          const mult = s.config.effective_input_rate_multiplier;
+          return (
+            <li
+              key={s.effective_from}
+              style={{
+                padding: "10px 12px",
+                marginBottom: 8,
+                background: "var(--muted, rgba(255,255,255,0.04))",
+                borderLeft: "3px solid var(--primary, #6366f1)",
+                borderRadius: 4,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <strong style={{ fontSize: 13 }}>
+                  {new Date(s.effective_from).toLocaleString()}
+                </strong>
+                <span style={{ fontSize: 12, color: "var(--tu-muted, #888)" }}>
+                  · {ratecount} rate row{ratecount === 1 ? "" : "s"} · margin{" "}
+                  {s.config.margin?.percent ?? 0}%
+                  {mult !== undefined && mult !== 1 && ` · multiplier ${mult}`}
+                </span>
+                <button
+                  type="button"
+                  style={{ marginLeft: "auto", ...styles.btn }}
+                  onClick={async () => {
+                    const label = new Date(s.effective_from).toLocaleString();
+                    const ok = window.confirm(`Revert to snapshot from ${label}?`);
+                    if (!ok) return;
+                    await revertAction({
+                      companyId,
+                      source_effective_from: s.effective_from,
+                    });
+                    window.location.reload();
+                  }}
+                >Revert to this</button>
+              </div>
+              {s.note && (
+                <div style={{ fontSize: 12, color: "var(--tu-muted, #888)", marginTop: 4 }}>
+                  Note: {s.note}
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
 export function SettingsPage(): JSX.Element {
   const host = useHostContext();
   const nav = useHostNavigation();
@@ -2337,6 +2420,7 @@ export function SettingsPage(): JSX.Element {
           <strong>Save failed.</strong> {saveError}
         </div>
       )}
+      <HistoryPanel companyId={companyId} />
     </div>
   );
 }
