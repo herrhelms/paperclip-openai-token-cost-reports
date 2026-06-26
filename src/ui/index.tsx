@@ -114,12 +114,12 @@ type DailyRow = {
   day: string;
   input_tokens: number;
   output_tokens: number;
+  list_usd?: number | null;
   cost_usd?: number | null;
   price_usd?: number | null;
+  list_native?: number | null;
   cost_native?: number | null;
   price_native?: number | null;
-  // Back-compat alias from v0.5.0 — still surfaced by the worker.
-  billable_usd?: number | null;
 };
 
 // Free-form rate table. Keys are any operator-supplied strings (raw OpenAI
@@ -140,6 +140,23 @@ type PricingSnapshot = {
   created_at?: string;
   created_by?: string | null;
 };
+
+// Cross-engine timestamp parser for postgres timestamptz values returned via
+// `::text`. Postgres formats these per the session's TimeZone setting and
+// uses a space separator and a 2-digit offset (e.g. "2026-06-24 01:32:45+02"),
+// which V8 accepts but Safari/Firefox historically reject. Normalize to
+// strict ISO 8601 (T separator, `+HH:MM` offset, default to Z when absent)
+// before handing to Date(). Returns null on parse failure so callers can
+// fall back to rendering the raw string rather than "Invalid Date".
+function parseTimestamp(raw: string): Date | null {
+  let iso = raw.includes("T") ? raw : raw.replace(" ", "T");
+  iso = iso.replace(/([+-]\d{2})(?::?(\d{2}))?$/, (_, sign, mins) =>
+    mins ? `${sign}:${mins}` : `${sign}:00`,
+  );
+  if (!/[Zz+-]\d?\d(?::\d{2})?$/.test(iso)) iso = `${iso}Z`;
+  const d = new Date(iso);
+  return Number.isFinite(d.getTime()) ? d : null;
+}
 
 // Walk common error shapes to find the human-readable message. SDK
 // action errors arrive as plain objects ({ message, error, ... }), Error
@@ -671,17 +688,19 @@ function isFutureMonth(a: MonthAnchor): boolean {
 }
 
 // Per-model shape returned by the worker's getPerModelForRange handler.
+// list/cost/price are null (not 0) when the model has no rate row in the
+// active pricing config — the UI uses null to render the "no rate set" chip.
 type PerModelRow = {
   model: string;
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+  list_usd: number | null;
   cost_usd: number | null;
   price_usd: number | null;
+  list_native: number | null;
   cost_native: number | null;
   price_native: number | null;
-  // Back-compat alias from v0.5.0.
-  billable_usd: number | null;
 };
 type PerModelResponse = {
   priced: boolean;
@@ -711,8 +730,10 @@ type PerAgentModelLine = {
   runs: number;
   input_tokens: number;
   output_tokens: number;
+  list_usd: number | null;
   cost_usd: number | null;
   price_usd: number | null;
+  list_native: number | null;
   cost_native: number | null;
   price_native: number | null;
 };
@@ -724,8 +745,10 @@ type PerAgentBlock = {
     runs: number;
     input_tokens: number;
     output_tokens: number;
+    list_usd: number | null;
     cost_usd: number | null;
     price_usd: number | null;
+    list_native: number | null;
     cost_native: number | null;
     price_native: number | null;
   };
@@ -737,6 +760,7 @@ type PerAgentResponse = {
   fxDay: string | null;
   fxSource: string | null;
   marginPercent: number;
+  effectiveInputRateMultiplier?: number;
   rows: PerAgentBlock[];
 };
 
@@ -1053,7 +1077,7 @@ function PerModelCard(props: {
         <h2 style={styles.sectionTitle}>By model</h2>
         <span style={styles.mutedLabel}>
           {props.priced
-            ? `Tokens · List → Client price (${props.currency})`
+            ? `Tokens · List → Your cost → Client price (${props.currency})`
             : "Tokens (Input · Output)"}
         </span>
       </div>
@@ -1094,7 +1118,10 @@ function PerModelCard(props: {
                       </span>
                     </>
                   ) : r.price_native !== null ? (
-                    ` · ${fmtMoney(r.cost_native, props.currency)} → ${fmtMoney(
+                    ` · ${fmtMoney(
+                      r.list_native ?? r.cost_native,
+                      props.currency,
+                    )} → ${fmtMoney(r.cost_native, props.currency)} → ${fmtMoney(
                       r.price_native,
                       props.currency,
                     )}`
@@ -1202,7 +1229,7 @@ function PerAgentCard(props: {
         <h2 style={styles.sectionTitle}>By agent</h2>
         <span style={styles.mutedLabel}>
           {priced
-            ? `Tokens · Runs · Cost → Price (${currency})`
+            ? `Tokens · Runs · List → Your cost → Client price (${currency})`
             : "Tokens · Runs"}
         </span>
       </div>
@@ -1214,8 +1241,9 @@ function PerAgentCard(props: {
               <th style={colHead}>Runs</th>
               <th style={colHead}>Input</th>
               <th style={colHead}>Output</th>
-              {priced && <th style={colHead}>Cost</th>}
-              {priced && <th style={colHead}>Price</th>}
+              {priced && <th style={colHead}>List</th>}
+              {priced && <th style={colHead}>Your cost</th>}
+              {priced && <th style={colHead}>Client price</th>}
             </tr>
           </thead>
           <tbody>
@@ -1230,6 +1258,14 @@ function PerAgentCard(props: {
                   <td style={totalCell}>
                     {fmtTokens(block.totals.output_tokens)}
                   </td>
+                  {priced && (
+                    <td style={totalCell}>
+                      {fmtMoney(
+                        block.totals.list_native ?? block.totals.cost_native,
+                        currency,
+                      )}
+                    </td>
+                  )}
                   {priced && (
                     <td style={totalCell}>
                       {fmtMoney(block.totals.cost_native, currency)}
@@ -1266,25 +1302,22 @@ function PerAgentCard(props: {
                             </a>
                           </span>
                         ) : (
-                          fmtMoney(m.cost_native, currency)
+                          fmtMoney(m.list_native ?? m.cost_native, currency)
                         )}
                       </td>
                     )}
                     {priced && (
                       <td style={subRowCell}>
-                        {m.cost_usd === null ? (
-                          <span style={styles.noRateChip}>
-                            no rate set
-                            <a
-                              href={settingsUrlForAddRate(m.model, props.settingsHref)}
-                              style={styles.noRateLink}
-                            >
-                              add rate →
-                            </a>
-                          </span>
-                        ) : (
-                          fmtMoney(m.price_native, currency)
-                        )}
+                        {m.cost_usd === null
+                          ? "—"
+                          : fmtMoney(m.cost_native, currency)}
+                      </td>
+                    )}
+                    {priced && (
+                      <td style={subRowCell}>
+                        {m.cost_usd === null
+                          ? "—"
+                          : fmtMoney(m.price_native, currency)}
                       </td>
                     )}
                   </tr>
@@ -1553,28 +1586,30 @@ export function UsagePage(): JSX.Element {
   const totals = useMemo(() => {
     let inp = 0;
     let out = 0;
+    let list_native = 0;
     let cost_native = 0;
     let price_native = 0;
     let hasCost = false;
+    // Worker emits three tiers explicitly — list_native (raw OpenAI),
+    // cost_native (list × multiplier), price_native (cost × (1 + margin/100)).
+    // Each accumulates per-day so periods spanning snapshots with different
+    // multipliers / margins still sum correctly.
     for (const r of dailyRows) {
       inp += Number(r.input_tokens) || 0;
       out += Number(r.output_tokens) || 0;
-      // Prefer the new currency-aware fields. Fall back to billable_usd which
-      // older worker builds returned in USD only.
+      if (typeof r.list_native === "number") {
+        list_native += r.list_native;
+        hasCost = true;
+      }
       if (typeof r.cost_native === "number") {
         cost_native += r.cost_native;
-        hasCost = true;
-      } else if (typeof (r as { cost_usd?: number }).cost_usd === "number") {
-        cost_native += (r as { cost_usd: number }).cost_usd;
         hasCost = true;
       }
       if (typeof r.price_native === "number") {
         price_native += r.price_native;
-      } else if (typeof r.billable_usd === "number") {
-        price_native += r.billable_usd;
       }
     }
-    return { inp, out, cost_native, price_native, hasCost };
+    return { inp, out, list_native, cost_native, price_native, hasCost };
   }, [dailyRows]);
 
   // Download the CSV by fetching it and triggering an anchor with the `download`
@@ -1858,60 +1893,113 @@ export function UsagePage(): JSX.Element {
         settingsLinkProps={settingsLinkProps}
       />
 
-      <div className="tu-kpi-row" style={styles.kpiRow}>
-        <KpiCard
-          label="Total tokens"
-          value={fmtTokensPrecise(totals.inp + totals.out)}
-          loading={isLoading}
-        />
-        <KpiCard
-          label="Input"
-          value={fmtTokensPrecise(totals.inp)}
-          loading={isLoading}
-        />
-        <KpiCard
-          label="Output"
-          value={fmtTokensPrecise(totals.out)}
-          loading={isLoading}
-        />
-        <KpiCard
-          label={`Cost (${currency})`}
-          value={
-            hasPricing && totals.hasCost
-              ? fmtMoney(totals.cost_native, currency)
-              : "—"
-          }
-          loading={isLoading}
-          sub={
-            !hasPricing ? (
-              <a {...settingsLinkProps} style={styles.link}>
-                Set pricing →
-              </a>
-            ) : (
-              <span style={styles.kpiSub}>tokens × per-1M rate</span>
-            )
-          }
-        />
-        <KpiCard
-          label={`Price (${currency})`}
-          value={
-            hasPricing && totals.hasCost
-              ? fmtMoney(totals.price_native, currency)
-              : "—"
-          }
-          loading={isLoading}
-          sub={
-            hasPricing ? (
-              <span
-                style={styles.kpiSub}
-                title={`Cost × (1 + ${pricingConfig?.margin?.percent ?? 0}% margin)`}
-              >
-                client invoice
-              </span>
-            ) : undefined
-          }
-        />
-      </div>
+      {(() => {
+        // KPI tiers (2.1.x):
+        //   List price   = totals.list_native   (raw OpenAI, no knobs)
+        //   Your cost    = totals.cost_native   (list × multiplier)
+        //   Client price = totals.price_native  (your cost × (1 + margin))
+        //
+        // Sub-labels read the *effective* multiplier/margin off the actual
+        // totals — when the period spans snapshots with different settings,
+        // the latest config lies. The (mixed) suffix surfaces the mismatch.
+        const latestMult = pricingConfig?.effective_input_rate_multiplier ?? 1;
+        const latestMarginPct = pricingConfig?.margin?.percent ?? 0;
+        const effectiveMult =
+          totals.hasCost && totals.list_native > 0
+            ? totals.cost_native / totals.list_native
+            : latestMult;
+        const effectiveMarginPct =
+          totals.hasCost && totals.cost_native > 0
+            ? (totals.price_native / totals.cost_native - 1) * 100
+            : latestMarginPct;
+        const multMixed =
+          totals.hasCost && Math.abs(effectiveMult - latestMult) >= 0.005;
+        const marginMixed =
+          totals.hasCost &&
+          Math.abs(effectiveMarginPct - latestMarginPct) >= 0.05;
+        const formatMult = (m: number): string =>
+          m >= 1 ? m.toFixed(2) : m.toFixed(3);
+        const effectiveMultLabel = formatMult(effectiveMult);
+        const effectiveMarginLabel = `${effectiveMarginPct.toFixed(
+          effectiveMarginPct >= 10 ? 0 : 1,
+        )}%`;
+        return (
+          <div className="tu-kpi-row" style={styles.kpiRow}>
+            <KpiCard
+              label="Total tokens"
+              value={fmtTokensPrecise(totals.inp + totals.out)}
+              loading={isLoading}
+            />
+            <KpiCard
+              label="Input"
+              value={fmtTokensPrecise(totals.inp)}
+              loading={isLoading}
+            />
+            <KpiCard
+              label="Output"
+              value={fmtTokensPrecise(totals.out)}
+              loading={isLoading}
+            />
+            <KpiCard
+              label={`List price (${currency})`}
+              value={
+                hasPricing && totals.hasCost
+                  ? fmtMoney(totals.list_native, currency)
+                  : "—"
+              }
+              loading={isLoading}
+              sub={
+                !hasPricing ? (
+                  <a {...settingsLinkProps} style={styles.link}>
+                    Set pricing →
+                  </a>
+                ) : (
+                  <span style={styles.kpiSub} title="tokens × per-1M OpenAI API rate">
+                    tokens × per-1M API rate
+                  </span>
+                )
+              }
+            />
+            <KpiCard
+              label={`Your cost (${currency})`}
+              value={
+                hasPricing && totals.hasCost
+                  ? fmtMoney(totals.cost_native, currency)
+                  : "—"
+              }
+              loading={isLoading}
+              sub={
+                hasPricing ? (
+                  <span style={styles.kpiSub}>
+                    {multMixed
+                      ? `effective ×${effectiveMultLabel} (mixed)`
+                      : effectiveMult === 1
+                        ? "no multiplier adjustment"
+                        : `after multiplier ×${effectiveMultLabel}`}
+                  </span>
+                ) : undefined
+              }
+            />
+            <KpiCard
+              label={`Client price (${currency})`}
+              value={
+                hasPricing && totals.hasCost
+                  ? fmtMoney(totals.price_native, currency)
+                  : "—"
+              }
+              loading={isLoading}
+              sub={
+                hasPricing ? (
+                  <span style={styles.kpiSub}>
+                    Your cost · +{effectiveMarginLabel} margin
+                    {marginMixed ? " (mixed)" : ""}
+                  </span>
+                ) : undefined
+              }
+            />
+          </div>
+        );
+      })()}
 
       {/* By model */}
       <PerModelCard
@@ -1970,33 +2058,97 @@ export function UsagePage(): JSX.Element {
 }
 
 
-function HistoryPanel({ companyId }: { companyId: string }): JSX.Element | null {
+function HistoryPanel({ companyId }: { companyId: string }): JSX.Element {
   const history = usePluginData("listPricingHistory", { companyId });
-  const revertAction = usePluginAction("revertToPricingSnapshot");
+  const clearAllAction = usePluginAction("clearAllPricing");
+  const toast = usePluginToast();
 
-  if (history.loading) {
-    return <div style={{ fontSize: 12, color: "var(--tu-muted, #888)" }}>Loading history…</div>;
-  }
-  const snapshots = (history.data as { snapshots?: PricingSnapshot[] } | undefined)?.snapshots ?? [];
-  if (!snapshots.length) {
-    return (
-      <div style={{ fontSize: 12, color: "var(--tu-muted, #888)" }}>
-        No snapshot history yet. Save pricing once to create the first snapshot.
-      </div>
+  const snapshots =
+    (history.data as { snapshots?: PricingSnapshot[] } | undefined)?.snapshots ??
+    [];
+  const snapshotCount = snapshots.length;
+  const onClearAll = async () => {
+    const ok = window.confirm(
+      `Delete all ${snapshotCount} pricing snapshot${snapshotCount === 1 ? "" : "s"} for this company?\n\nUntil you save new pricing, cost and client price columns will show "—" for every period.\n\nThis cannot be undone.`,
     );
-  }
+    if (!ok) return;
+    try {
+      const res = (await clearAllAction({ companyId })) as
+        | { deleted?: number }
+        | undefined;
+      toast?.({
+        title: "Snapshots cleared",
+        body: `${res?.deleted ?? snapshotCount} snapshot${
+          (res?.deleted ?? snapshotCount) === 1 ? "" : "s"
+        } removed. Save new pricing to start fresh.`,
+        tone: "success",
+      });
+      history.refresh();
+    } catch (err) {
+      const msg = extractErrorMessage(err);
+      toast?.({ title: "Clear failed", body: msg, tone: "error" });
+    }
+  };
+
+  // Section header + Clear-all button render unconditionally so the
+  // destructive action's only safety net (the button itself) doesn't
+  // vanish along with the list it just emptied.
   return (
     <section style={{ marginTop: 24 }}>
-      <h3 style={{ fontSize: 14 }}>Pricing snapshots</h3>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          marginBottom: 4,
+        }}
+      >
+        <h3 style={{ fontSize: 14, margin: 0 }}>Pricing snapshots</h3>
+        <button
+          type="button"
+          style={{ marginLeft: "auto", ...styles.btnGhost }}
+          onClick={onClearAll}
+          disabled={snapshotCount === 0 || history.loading}
+          title="Delete every pricing snapshot for this company"
+        >
+          Clear all
+        </button>
+      </div>
       <p style={{ fontSize: 12, color: "var(--tu-muted, #888)", maxWidth: 640 }}>
-        Each save creates a snapshot. Historical periods bill against the
-        snapshot active when the tokens were burned. Click "Revert" to copy
-        a snapshot's config into a new save with effective_from=now.
+        Saving pricing replaces the active snapshot and reprices every event
+        in this company. Period-by-period historical overrides can be added
+        via the addPricingSnapshot action.
       </p>
+      {history.loading ? (
+        <div style={{ fontSize: 12, color: "var(--tu-muted, #888)" }}>
+          Loading history…
+        </div>
+      ) : snapshotCount === 0 ? (
+        <div style={{ fontSize: 12, color: "var(--tu-muted, #888)" }}>
+          No snapshot history yet. Save pricing once to create the first snapshot.
+        </div>
+      ) : null}
       <ul style={{ listStyle: "none", padding: 0, marginTop: 12 }}>
         {snapshots.map((s) => {
           const ratecount = Object.keys(s.config.pricing ?? {}).length;
           const mult = s.config.effective_input_rate_multiplier;
+          // setPricing stamps "applies to everything" snapshots at the unix
+          // epoch — render a meaningful label rather than "1/1/1970" and
+          // surface the actual save time via created_at next to it.
+          const effectiveAt = parseTimestamp(s.effective_from);
+          const isEpoch =
+            effectiveAt !== null && effectiveAt.getTime() <= 0;
+          const headerLabel = isEpoch
+            ? "Applies to every event"
+            : effectiveAt
+              ? `From ${effectiveAt.toLocaleString()}`
+              : `From ${s.effective_from}`;
+          const savedAt = s.created_at ? parseTimestamp(s.created_at) : null;
+          const savedAtLabel = savedAt
+            ? `saved ${savedAt.toLocaleString()}`
+            : s.created_at
+              ? `saved ${s.created_at}`
+              : null;
           return (
             <li
               key={s.effective_from}
@@ -2009,28 +2161,13 @@ function HistoryPanel({ companyId }: { companyId: string }): JSX.Element | null 
               }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <strong style={{ fontSize: 13 }}>
-                  {new Date(s.effective_from).toLocaleString()}
-                </strong>
+                <strong style={{ fontSize: 13 }}>{headerLabel}</strong>
                 <span style={{ fontSize: 12, color: "var(--tu-muted, #888)" }}>
                   · {ratecount} rate row{ratecount === 1 ? "" : "s"} · margin{" "}
                   {s.config.margin?.percent ?? 0}%
                   {mult !== undefined && mult !== 1 && ` · multiplier ${mult}`}
+                  {savedAtLabel ? ` · ${savedAtLabel}` : ""}
                 </span>
-                <button
-                  type="button"
-                  style={{ marginLeft: "auto", ...styles.btn }}
-                  onClick={async () => {
-                    const label = new Date(s.effective_from).toLocaleString();
-                    const ok = window.confirm(`Revert to snapshot from ${label}?`);
-                    if (!ok) return;
-                    await revertAction({
-                      companyId,
-                      source_effective_from: s.effective_from,
-                    });
-                    window.location.reload();
-                  }}
-                >Revert to this</button>
               </div>
               {s.note && (
                 <div style={{ fontSize: 12, color: "var(--tu-muted, #888)", marginTop: 4 }}>
@@ -2481,7 +2618,7 @@ export function SettingsPage(): JSX.Element {
         />
       </div>
 
-      <div style={{ marginTop: 24, display: "flex", gap: 12 }}>
+      <div style={{ marginTop: 24, display: "flex", alignItems: "center", gap: 12 }}>
         <button
           style={styles.btnPrimary}
           onClick={save}
@@ -2489,6 +2626,10 @@ export function SettingsPage(): JSX.Element {
         >
           {saving ? "Saving…" : "Save"}
         </button>
+        <span style={{ fontSize: 12, color: "var(--tu-muted, #888)" }}>
+          Saving applies this pricing to every event in this company —
+          past and future.
+        </span>
       </div>
       {saveError && (
         <div

@@ -6,6 +6,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-06-27
+
+Mirror of `@herrhelms/claude-token-cost-reports@2.1.1`. The dashboard's three money cards (List / Your cost / Client price) now compute from explicit per-tier values everywhere instead of inferring two of the three by back-arithmetic. setPricing also became "set my current pricing for every event" rather than "append a snapshot from now onward", matching every operator's actual mental model.
+
+### Changed (semantics, not breaking the wire shape)
+- **`setPricing` now replaces all snapshots with one epoch-effective row** instead of appending. Multiplier/margin/rate changes apply to every event in the company immediately — past and future. Implementation: INSERT-first-then-DELETE-non-epoch as two `ctx.db.execute` calls; the host's plugin-database validator only accepts bare INSERT/UPDATE/DELETE so a single CTE-atomic statement isn't possible. INSERT-first ordering means the company is never observed snapshot-less.
+- **`effective_input_rate_multiplier` now scales the entire list price** (input + output), not just input. The variable name is a legacy 1.x artifact; the helper text already promised whole-bundle semantics.
+
+### Added
+- **`priceTiers(rawModel, input, output, cfg) → { list, cost, price, hasRate }`** — the canonical money helper. Single source of truth for the `list × multiplier × (1 + margin)` math. Replaces hand-rolled rollups previously duplicated at 5 worker handler sites.
+- **`clearAllPricing({ companyId })`** action + Settings UI "Clear all" button. Operator escape hatch with confirmation prompt.
+- Three money tiers explicitly emitted by `getDailyUsage`, `getPerModelForRange`, `getPerAgentBreakdown`: `list_usd` / `cost_usd` / `price_usd` plus their `_native` (FX-converted) twins. Worker emits `null` (not `0`) for money fields when a model has no rate row in the active config, so the UI can render the "no rate set / add rate →" chip per model.
+- 6 new tests for `priceTiers` covering hasRate detection, multiplier+margin compounding, defaults, NaN-defense, and the `list ≥ cost ≤ price` ordering invariant.
+
+### Fixed
+- **PerModelCard / PerAgentCard now show all three money tiers per row** (List → Your cost → Client price). Previously only two columns ("Cost" / "Price") that conflated list and post-multiplier.
+- **KPI sub-labels derive effective multiplier and margin from totals**, not from the latest snapshot's config. When the period spans snapshots with different settings, the label reads e.g. "+4.8% margin (mixed)" instead of falsely claiming "+0% margin" while Client price is materially above Your cost.
+- **"No rate set" chip per model is reachable.** Worker was emitting `cost_usd = 0` (not `null`) for models with no rate row, masking the missing-rate case. Now emits `null` end-to-end.
+- **HistoryPanel `parseTimestamp` helper handles cross-browser postgres timestamptz formats.** Normalizes space→T, bare `+HH`→`+HH:00`, appends `Z` for naive timestamps. Falls back to rendering the raw string if parsing still fails.
+- **HistoryPanel Clear-all button persists after a wipe** — destructive action's only safety net no longer vanishes with the list it just emptied.
+- **Epoch-effective snapshots render "Applies to every event"** instead of "1/1/1970, 1:00 AM". Save time still surfaces via `created_at`.
+
+### Removed
+- `getMonthlySummary` data handler. Had no UI consumer and its rollup became internally inconsistent when mult ≠ 1.
+- `revertToPricingSnapshot` action. With wipe-and-replace `setPricing`, there's typically only one snapshot to revert from.
+- `billable_usd` back-compat alias on DailyRow / PerModelRow. No consumer remained.
+
 ## [2.0.0] - 2026-06-22
 
 First major version. Mirror of `@herrhelms/claude-token-cost-reports@2.0.5` with all UI / save-error / multiplier-input / loading-state patches baked in from day one. Replaces the hardcoded `ModelKey` enum + single mutable pricing config with a free-form pricing matrix stored as snapshots, so operators can add any model id themselves and historical periods bill against the rates active when the tokens were burned. No code release needed when OpenAI ships a new model id.

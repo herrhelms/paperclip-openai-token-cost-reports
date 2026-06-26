@@ -16,7 +16,7 @@ paperclipai plugin install @herrhelms/openai-token-cost-reports
 
 # Verify the install
 paperclipai plugin list
-# expect: key=openai-token-cost-reports  status=ready  version=2.0.0  id=<uuid>
+# expect: key=openai-token-cost-reports  status=ready  version=2.1.0  id=<uuid>
 ```
 
 The host runs the plugin's database migrations automatically and registers the dashboard + settings page slots. No additional configuration is required to install — pricing and currency are set per-company in the Settings page after install.
@@ -90,33 +90,38 @@ The dashboard inherits the host's Paperclip theme (light/dark, shadcn-style card
 For each event with model `m`, input tokens `i`, output tokens `o`:
 
 ```text
-cost_usd     = (i × pricing[m].input + o × pricing[m].output) / 1_000_000     # USD
-client_price = cost_usd × (1 + margin.percent / 100)                            # USD
-row.price    = client_price × fx_rate(month_end_day, currency)                  # Native currency
+list          = (i × pricing[m].input + o × pricing[m].output) / 1_000_000     # USD, raw OpenAI
+your_cost     = list × effective_input_rate_multiplier                          # USD, post-adjustment
+client_price  = your_cost × (1 + margin.percent / 100)                          # USD, post-margin
+row.price     = client_price × fx_rate(month_end_day, currency)                 # Native currency
 ```
 
-The dashboard KPI **Cost** shows `cost_usd` summed in native currency (what an API user would pay at list price). KPI **Price** shows `row.price` summed (what the client owes after margin and currency conversion). The per-model and per-agent cards show both side by side, so reconciliation is explicit.
+The dashboard surfaces all three tiers explicitly. **List price** is what an API user would pay at OpenAI list. **Your cost** is what the operator effectively owes (post-adjustment). **Client price** is what the customer is billed (after operator margin). Per-model and per-agent cards show the same three numbers per row so reconciliation is explicit.
 
-The monthly CSV emits only `row.price` — operator-internal numbers (margin %) stay off the file you send to the client.
+The monthly CSV emits only `row.price` — operator-internal numbers (list, multiplier, margin) stay off the file you send to the client.
 
 ---
 
 ## Cost adjustment multiplier
 
 The plugin has one knob: `effective_input_rate_multiplier`, default `1.0`
-(full list price for both input and output tokens). It applies to the
-input rate only — output stays at list.
+(full list price). It scales the **entire list price** (input + output);
+the variable name is a legacy artifact from earlier versions where it
+applied to input only.
 
 Useful when:
 
 | Scenario | Multiplier | Why |
 | --- | --- | --- |
 | Default | 1.0 | Client pays full API list price |
-| High cache-hit ratio | 0.5 | OpenAI's cached input is ~10% of standard; if half your tokens are cache hits, the effective input rate is ~0.55× — round down to 0.5 for a conservative bill |
+| High cache-hit ratio | 0.5 | OpenAI's cached input is ~10% of standard; if half your tokens are cache hits, the effective rate is roughly half — pick a value matching your workload |
 | Custom contract | any value in (0, 1] | Operator-specific arrangement |
 
-Switching the multiplier creates a new snapshot, so historical periods
-are unaffected.
+Saving pricing in Settings **replaces** the active snapshot and reprices
+every event in this company — past and future — so changing the multiplier
+is reflected across the full report immediately. To preserve period-by-period
+historical overrides, append snapshots explicitly via the `addPricingSnapshot`
+action (advanced).
 
 ---
 

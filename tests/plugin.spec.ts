@@ -5,6 +5,7 @@ import {
   isIsoDate,
   isPlausibleFxRate,
   priceFor,
+  priceTiers,
   slugifyForFilename,
 } from "../src/worker";
 import {
@@ -120,14 +121,81 @@ describe("priceFor (free-form)", () => {
     expect(outputCost).toBeCloseTo(30, 8);  // 1M × $30 = $30
   });
 
-  it("applies effective_input_rate_multiplier to input only", () => {
+  it("ignores effective_input_rate_multiplier — priceFor returns raw list", () => {
+    // 2.1.x: priceFor returns OpenAI list pricing (tokens × rate). Callers
+    // apply the multiplier themselves as part of the three-tier rollup
+    // (list → your cost → client price), so this primitive must NOT
+    // pre-multiply input.
     const withMult: PricingConfig = {
       ...cfg,
       effective_input_rate_multiplier: 0.2,
     };
     const { inputCost, outputCost } = priceFor("gpt-5.5", 2_000_000, 1_000_000, withMult);
-    expect(inputCost).toBeCloseTo(2, 8);   // 10 × 0.2
-    expect(outputCost).toBeCloseTo(30, 8); // unchanged
+    expect(inputCost).toBeCloseTo(10, 8);  // raw list — multiplier ignored
+    expect(outputCost).toBeCloseTo(30, 8);
+  });
+});
+
+// ---- Three-tier rollup (the canonical helper) -----------------------------
+
+describe("priceTiers", () => {
+  const baseCfg: PricingConfig = {
+    pricing: {
+      "gpt-5.5": { input: 5, output: 30 },
+    },
+    margin: { percent: 0 },
+  };
+
+  it("flags hasRate=false and emits zeros when the model has no rate row", () => {
+    const t = priceTiers("o4-mini", 1_000_000, 1_000_000, baseCfg);
+    expect(t.hasRate).toBe(false);
+    expect(t.list).toBe(0);
+    expect(t.cost).toBe(0);
+    expect(t.price).toBe(0);
+  });
+
+  it("collapses to list = cost = price when multiplier is 1 and margin is 0", () => {
+    const t = priceTiers("gpt-5.5", 2_000_000, 1_000_000, baseCfg);
+    expect(t.hasRate).toBe(true);
+    expect(t.list).toBeCloseTo(40, 8); // 2×$5 + 1×$30
+    expect(t.cost).toBeCloseTo(40, 8);
+    expect(t.price).toBeCloseTo(40, 8);
+  });
+
+  it("scales cost by multiplier on the whole list, then margin on top", () => {
+    const cfg: PricingConfig = {
+      ...baseCfg,
+      margin: { percent: 15 },
+      effective_input_rate_multiplier: 0.05,
+    };
+    const t = priceTiers("gpt-5.5", 2_000_000, 1_000_000, cfg);
+    // list = $40; cost = 40 × 0.05 = $2.00; price = 2.00 × 1.15 = $2.30
+    expect(t.list).toBeCloseTo(40, 8);
+    expect(t.cost).toBeCloseTo(2, 8);
+    expect(t.price).toBeCloseTo(2.3, 8);
+  });
+
+  it("treats missing effective_input_rate_multiplier as 1.0", () => {
+    const t = priceTiers("gpt-5.5", 2_000_000, 0, baseCfg);
+    expect(t.cost).toBeCloseTo(t.list, 8);
+  });
+
+  it("returns finite numbers for negative-token inputs (defensive)", () => {
+    const t = priceTiers("gpt-5.5", -1, -1, baseCfg);
+    expect(Number.isFinite(t.list)).toBe(true);
+    expect(Number.isFinite(t.cost)).toBe(true);
+    expect(Number.isFinite(t.price)).toBe(true);
+  });
+
+  it("maintains list ≥ cost ≤ price ordering for any valid mult + margin", () => {
+    const cfg: PricingConfig = {
+      ...baseCfg,
+      margin: { percent: 20 },
+      effective_input_rate_multiplier: 0.5,
+    };
+    const t = priceTiers("gpt-5.5", 3_000_000, 1_000_000, cfg);
+    expect(t.list).toBeGreaterThanOrEqual(t.cost);
+    expect(t.price).toBeGreaterThanOrEqual(t.cost);
   });
 });
 
