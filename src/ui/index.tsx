@@ -2034,10 +2034,9 @@ export function UsagePage(): JSX.Element {
         <div style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
           {hasPricing && pricingConfig ? (
             <>
-              Pricing configured. GPT-5.5 $
-              {pricingConfig.pricing["gpt-5-5"].input}/$
-              {pricingConfig.pricing["gpt-5-5"].output} per 1M tokens; margin{" "}
-              {pricingConfig.margin.percent}%.{" "}
+              Pricing configured: {Object.keys(pricingConfig.pricing).length}{" "}
+              model rate{Object.keys(pricingConfig.pricing).length === 1 ? "" : "s"};
+              margin {pricingConfig.margin.percent}%.{" "}
               <a {...settingsLinkProps} style={styles.link}>
                 Edit rates →
               </a>

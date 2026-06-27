@@ -1,6 +1,6 @@
 {
   "name": "@herrhelms/openai-token-cost-reports",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Track OpenAI API token usage per Paperclip company, store daily rollups, render a dashboard, and export a monthly CSV for token-based billing. Pricing table covers GPT-5.5 / GPT-5.4 family and GPT-5.3 Codex.",
   "publishConfig": {
     "access": "public"

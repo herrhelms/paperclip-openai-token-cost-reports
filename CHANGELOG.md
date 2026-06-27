@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-06-27
+
+### Fixed
+- **Dashboard no longer crashes ("OpenAI Token Usage: failed to render") on companies with seeded default pricing.** The pricing footer hardcoded the model key `"gpt-5-5"` (hyphen) but the default seed pricing uses `"gpt-5.5"` (period), so `pricingConfig.pricing["gpt-5-5"]` returned `undefined` and accessing `.input` on it threw. Replaced with a generic rate-count display (`"Pricing configured: N model rates; margin M%"`) that doesn't depend on any particular model key existing. Pre-existing bug from 2.0.0, surfaced on first real installs.
+
 ## [2.1.0] - 2026-06-27
 
 Mirror of `@herrhelms/claude-token-cost-reports@2.1.1`. The dashboard's three money cards (List / Your cost / Client price) now compute from explicit per-tier values everywhere instead of inferring two of the three by back-arithmetic. setPricing also became "set my current pricing for every event" rather than "append a snapshot from now onward", matching every operator's actual mental model.
